@@ -161,3 +161,62 @@ def test_is_narrowed_helper():
     assert is_narrowed({"id": "x"}, FAKE_SECRET) is True
     assert is_narrowed({"leaked": FAKE_SECRET}, FAKE_SECRET) is False
     assert is_narrowed(f"x {FAKE_SECRET}", FAKE_SECRET) is False
+
+
+# --- Adversarial leak-sweep carriers (pre-publish wide audit 2026-06-10) ----
+# Each hides the raw secret in a shape the original sweep missed. The resolver
+# MUST fail closed (DenyLeakError) for every one.
+
+def _expect_leak(dto_factory):
+    vg, vgbi, _ = fake_get()
+    resolve = create_vault_resolver(
+        use=lambda secret, a: dto_factory(secret),
+        label="k", password="pw", vault_get=vg, vault_get_by_id=vgbi,
+    )
+    with pytest.raises(DenyLeakError):
+        resolve({})
+
+
+def test_leak_sweep_object_attribute_fails_closed():
+    class Carrier:
+        def __init__(self, secret):
+            self.ok = True
+            self.token = secret
+
+    _expect_leak(lambda s: Carrier(s))
+
+
+def test_leak_sweep_slots_attribute_fails_closed():
+    class Slotted:
+        __slots__ = ("token",)
+
+        def __init__(self, secret):
+            self.token = secret
+
+    _expect_leak(lambda s: Slotted(s))
+
+
+def test_leak_sweep_property_getter_fails_closed():
+    class LazyCarrier:
+        def __init__(self, secret):
+            self._s = secret
+
+        @property
+        def token(self):
+            return self._s
+
+    _expect_leak(lambda s: LazyCarrier(s))
+
+
+def test_leak_sweep_bytes_carrier_fails_closed():
+    _expect_leak(lambda s: {"ok": True, "blob": s.encode("utf-8")})
+
+
+def test_leak_sweep_memoryview_carrier_fails_closed():
+    _expect_leak(lambda s: {"ok": True, "blob": memoryview(s.encode("utf-8"))})
+
+
+def test_leak_sweep_array_carrier_fails_closed():
+    import array
+
+    _expect_leak(lambda s: {"ok": True, "blob": array.array("B", s.encode("utf-8"))})

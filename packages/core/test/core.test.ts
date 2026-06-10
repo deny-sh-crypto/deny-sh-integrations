@@ -205,3 +205,68 @@ test('isNarrowed helper matches the sweep semantics', () => {
   assert.equal(isNarrowed({ leaked: FAKE_SECRET }, FAKE_SECRET), false);
   assert.equal(isNarrowed(`prefix ${FAKE_SECRET}`, FAKE_SECRET), false);
 });
+
+// ─── Adversarial leak-sweep carriers (pre-publish wide audit 2026-06-10) ─────
+// Each case hides the raw secret in a DTO shape the original sweep missed. The
+// resolver MUST fail closed (DenyLeakError) for every one.
+
+async function expectLeak(dto: unknown): Promise<void> {
+  const resolve = createVaultResolver({
+    label: 'k',
+    password: 'pw',
+    client: mockClient(),
+    use: () => dto,
+  });
+  await assert.rejects(() => resolve({}), DenyLeakError);
+}
+
+test('leak sweep: secret behind a Symbol-keyed property', async () => {
+  const sym = Symbol('hidden');
+  await expectLeak({ ok: true, [sym]: FAKE_SECRET });
+});
+
+test('leak sweep: secret behind a non-enumerable property', async () => {
+  const dto: Record<string, unknown> = { ok: true };
+  Object.defineProperty(dto, 'hidden', { value: FAKE_SECRET, enumerable: false });
+  await expectLeak(dto);
+});
+
+test('leak sweep: secret revealed by an own getter', async () => {
+  const dto = {
+    ok: true,
+    get token() {
+      return FAKE_SECRET;
+    },
+  };
+  await expectLeak(dto);
+});
+
+test('leak sweep: secret revealed by a prototype-chain getter', async () => {
+  class Carrier {
+    ok = true;
+    get token(): string {
+      return FAKE_SECRET;
+    }
+  }
+  await expectLeak(new Carrier());
+});
+
+test('leak sweep: secret bytes in a Buffer/Uint8Array', async () => {
+  await expectLeak({ ok: true, blob: Buffer.from(FAKE_SECRET, 'utf8') });
+});
+
+test('leak sweep: secret bytes in a raw ArrayBuffer', async () => {
+  const u8 = new TextEncoder().encode(FAKE_SECRET);
+  await expectLeak({ ok: true, blob: u8.buffer });
+});
+
+test('leak sweep: still passes a genuinely narrowed DTO', async () => {
+  const resolve = createVaultResolver({
+    label: 'k',
+    password: 'pw',
+    client: mockClient(),
+    use: () => ({ ok: true, last4: '4242', charged: 1999 }),
+  });
+  const out = await resolve({});
+  assert.deepEqual(out, { ok: true, last4: '4242', charged: 1999 });
+});

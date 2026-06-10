@@ -144,10 +144,65 @@ function containsSecret(value: unknown, secret: string, seen: WeakSet<object>): 
       for (const el of obj) if (containsSecret(el, secret, seen)) return true;
       return false;
     }
-    // Check own enumerable keys AND values (a secret could be used as a key).
-    for (const key of Object.keys(obj)) {
-      if (key.includes(secret)) return true;
-      if (containsSecret((obj as Record<string, unknown>)[key], secret, seen)) return true;
+    // Binary carriers: a secret can cross the boundary as raw bytes in a
+    // TypedArray / Buffer / DataView / ArrayBuffer without ever being a string.
+    // Decode the bytes latin1 + utf8 and scan for the secret's byte sequence.
+    if (ArrayBuffer.isView(obj) || obj instanceof ArrayBuffer) {
+      try {
+        const bytes =
+          obj instanceof ArrayBuffer
+            ? new Uint8Array(obj)
+            : new Uint8Array(
+                (obj as ArrayBufferView).buffer,
+                (obj as ArrayBufferView).byteOffset,
+                (obj as ArrayBufferView).byteLength,
+              );
+        // latin1 gives a 1:1 byte->char view so a byte-spliced ASCII secret is
+        // visible; utf8 catches a normally-encoded string buffer.
+        let latin1 = '';
+        for (let i = 0; i < bytes.length; i++) latin1 += String.fromCharCode(bytes[i]);
+        if (latin1.includes(secret)) return true;
+        try {
+          if (new TextDecoder('utf-8').decode(bytes).includes(secret)) return true;
+        } catch {
+          /* ignore decode failure */
+        }
+      } catch {
+        /* ignore */
+      }
+      return false;
+    }
+    // Check ALL own keys (string AND symbol, enumerable AND non-enumerable)
+    // plus getters, so a secret hidden behind a Symbol key, a non-enumerable
+    // property, or a lazily-revealing getter cannot evade the sweep.
+    for (const key of Reflect.ownKeys(obj)) {
+      if (typeof key === 'string' && key.includes(secret)) return true;
+      let v: unknown;
+      try {
+        v = (obj as Record<string | symbol, unknown>)[key];
+      } catch {
+        // A throwing getter cannot hand the secret to the model, skip it.
+        continue;
+      }
+      if (containsSecret(v, secret, seen)) return true;
+    }
+    // Walk prototype-chain getters too (own-key walk above misses inherited
+    // accessor properties that a serializer/framework could still read).
+    let proto = Object.getPrototypeOf(obj);
+    while (proto && proto !== Object.prototype && proto !== Array.prototype) {
+      for (const key of Object.getOwnPropertyNames(proto)) {
+        const desc = Object.getOwnPropertyDescriptor(proto, key);
+        if (desc && typeof desc.get === 'function') {
+          let v: unknown;
+          try {
+            v = (obj as Record<string, unknown>)[key];
+          } catch {
+            continue;
+          }
+          if (containsSecret(v, secret, seen)) return true;
+        }
+      }
+      proto = Object.getPrototypeOf(proto);
     }
     // Also sweep a custom toString, in case the DTO renders the secret lazily.
     try {

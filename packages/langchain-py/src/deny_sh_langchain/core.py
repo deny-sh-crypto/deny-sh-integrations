@@ -37,9 +37,9 @@ def _contains_secret(value: Any, secret: str, seen: set[int]) -> bool:
         return False
     if isinstance(value, str):
         return secret in value
-    if isinstance(value, (bytes, bytearray)):
+    if isinstance(value, (bytes, bytearray, memoryview)):
         try:
-            return secret in value.decode("utf-8", "ignore")
+            return secret in bytes(value).decode("utf-8", "ignore")
         except Exception:
             return False
     if isinstance(value, (int, float, bool)):
@@ -60,6 +60,52 @@ def _contains_secret(value: Any, secret: str, seen: set[int]) -> bool:
             if _contains_secret(el, secret, seen):
                 return True
         return False
+    # array.array byte/char carriers (e.g. array('B', secret_bytes)).
+    try:
+        import array as _array
+
+        if isinstance(value, _array.array):
+            try:
+                if secret in bytes(value).decode("utf-8", "ignore"):
+                    return True
+            except Exception:
+                pass
+            for el in value:
+                if _contains_secret(el, secret, seen):
+                    return True
+            return False
+    except Exception:
+        pass
+    # Object attributes: a secret can hide behind an instance attribute,
+    # __slots__ field, or a property whose getter lazily reveals it. Walk
+    # __dict__ and the class's property descriptors so a narrowed-looking DTO
+    # that carries the secret on a non-str-rendered attribute cannot evade.
+    inst_dict = getattr(value, "__dict__", None)
+    if isinstance(inst_dict, dict):
+        for k, v in inst_dict.items():
+            if isinstance(k, str) and secret in k:
+                return True
+            if _contains_secret(v, secret, seen):
+                return True
+    slots = getattr(type(value), "__slots__", None)
+    if slots:
+        names = (slots,) if isinstance(slots, str) else slots
+        for name in names:
+            try:
+                v = getattr(value, name)
+            except Exception:
+                continue
+            if _contains_secret(v, secret, seen):
+                return True
+    for klass in type(value).__mro__:
+        for name, attr in vars(klass).items():
+            if isinstance(attr, property):
+                try:
+                    v = getattr(value, name)
+                except Exception:
+                    continue
+                if _contains_secret(v, secret, seen):
+                    return True
     # Fallback: any object whose repr/str renders the secret.
     try:
         if secret in str(value):
