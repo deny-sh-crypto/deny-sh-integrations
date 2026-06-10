@@ -7,7 +7,8 @@
   "workspaces": [
     "packages/core",
     "packages/langchain-js",
-    "packages/vercel-ai"
+    "packages/vercel-ai",
+    "packages/openai-agents"
   ],
   "scripts": {
     "build": "npm run build --workspaces --if-present",

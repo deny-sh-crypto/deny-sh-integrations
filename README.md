@@ -16,7 +16,9 @@ packaged so you skip the boilerplate.
 |---------|-----------|---------|
 | [`@deny-sh/langchain`](packages/langchain-js) | LangChain v1 (JS/TS) | `npm i @deny-sh/langchain @langchain/core` |
 | [`@deny-sh/vercel-ai`](packages/vercel-ai) | Vercel AI SDK (v5) | `npm i @deny-sh/vercel-ai ai` |
+| [`@deny-sh/openai-agents`](packages/openai-agents) | OpenAI Agents SDK (JS/TS) | `npm i @deny-sh/openai-agents @openai/agents` |
 | [`deny-sh-langchain`](packages/langchain-py) | LangChain v1 (Python) | `pip install deny-sh-langchain` |
+| [`deny-sh-openai-agents`](packages/openai-agents-py) | OpenAI Agents SDK (Python) | `pip install deny-sh-openai-agents` |
 | [`@deny-sh/integrations-core`](packages/core) | framework-agnostic core | (dependency of the above) |
 
 More frameworks (LlamaIndex, CrewAI, Pydantic-AI, AutoGen, n8n, OpenAI Agents
