@@ -1,0 +1,20 @@
+{
+  "name": "deny-sh-integrations",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Drop-in deny.sh credential-isolation adapters for AI agent frameworks (LangChain, Vercel AI SDK, ...). Public monorepo.",
+  "type": "module",
+  "workspaces": [
+    "packages/core",
+    "packages/langchain-js",
+    "packages/vercel-ai"
+  ],
+  "scripts": {
+    "build": "npm run build --workspaces --if-present",
+    "test": "npm run test --workspaces --if-present",
+    "typecheck": "npm run typecheck --workspaces --if-present"
+  },
+  "license": "Apache-2.0",
+  "author": "deny.sh",
+  "engines": { "node": ">=18" }
+}
