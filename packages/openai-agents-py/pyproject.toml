@@ -1,0 +1,36 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "deny-sh-openai-agents"
+version = "0.1.0"
+description = "Wrap a deny.sh vault entry as an OpenAI Agents SDK tool. The credential resolves inside the tool boundary; only a narrowed DTO reaches the model. Fail-closed leak sweep."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "Apache-2.0" }
+authors = [{ name = "deny.sh", email = "hello@deny.sh" }]
+keywords = ["deny.sh", "openai-agents", "ai-agents", "credential-isolation", "deniable", "vault", "tool-calling"]
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "License :: OSI Approved :: Apache Software License",
+  "Intended Audience :: Developers",
+  "Topic :: Security :: Cryptography",
+]
+dependencies = [
+  "deny-sh>=2.2.0",
+]
+
+[project.optional-dependencies]
+agents = ["openai-agents>=0.1,<1"]
+dev = ["openai-agents>=0.1,<1", "pydantic>=2", "pytest>=8"]
+
+[project.urls]
+Homepage = "https://deny.sh/integrations/openai-agents"
+Repository = "https://github.com/deny-sh-crypto/deny-sh-integrations"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/deny_sh_openai_agents"]
+
+[tool.hatch.build.targets.sdist]
+include = ["src/deny_sh_openai_agents", "README.md", "LICENSE"]
