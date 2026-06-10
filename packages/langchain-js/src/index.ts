@@ -1,12 +1,12 @@
 /**
- * @deny-sh/langchain — wrap a deny.sh vault entry as a LangChain v1 tool.
+ * deny-sh-langchain — wrap a deny.sh vault entry as a LangChain v1 tool.
  *
  * The credential is resolved + consumed inside the tool boundary; only a
  * narrowed DTO is returned to the agent. A fail-closed leak sweep (from
- * @deny-sh/integrations-core) guarantees the raw secret never crosses back
+ * deny-sh-integrations-core) guarantees the raw secret never crosses back
  * into the model context.
  *
- *   import { denyVaultTool } from '@deny-sh/langchain';
+ *   import { denyVaultTool } from 'deny-sh-langchain';
  *   import { z } from 'zod';
  *
  *   const invoiceTool = denyVaultTool({
@@ -33,7 +33,7 @@ import {
   createVaultResolver,
   type DenyVaultClientOptions,
   type VaultClient,
-} from '@deny-sh/integrations-core';
+} from 'deny-sh-integrations-core';
 
 // Minimal structural type for a zod schema, so we don't force a zod version on
 // the consumer beyond what LangChain itself peers. LangChain's `tool()` accepts
@@ -103,5 +103,5 @@ export function denyVaultTool<TArgs = Record<string, unknown>, TResult = unknown
   return built as unknown as StructuredToolInterface;
 }
 
-export { createVaultResolver, DenyToolError, DenyLeakError, isNarrowed } from '@deny-sh/integrations-core';
-export type { DenyVaultClientOptions, VaultClient } from '@deny-sh/integrations-core';
+export { createVaultResolver, DenyToolError, DenyLeakError, isNarrowed } from 'deny-sh-integrations-core';
+export type { DenyVaultClientOptions, VaultClient } from 'deny-sh-integrations-core';

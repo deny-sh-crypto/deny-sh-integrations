@@ -1,11 +1,11 @@
-# @deny-sh/openai-agents
+# deny-sh-openai-agents
 
 Wrap a [deny.sh](https://deny.sh) vault entry as an [OpenAI Agents SDK](https://openai.github.io/openai-agents-js/) tool. The
 credential resolves inside `execute()`; only a narrowed DTO reaches the model.
 Fail-closed leak sweep.
 
 ```bash
-npm install @deny-sh/openai-agents @openai/agents
+npm install deny-sh-openai-agents @openai/agents
 # plus zod (peered by @openai/agents v4)
 npm install zod
 ```
@@ -14,7 +14,7 @@ npm install zod
 
 ```ts
 import { Agent, run } from '@openai/agents';
-import { denyVaultTool } from '@deny-sh/openai-agents';
+import { denyVaultTool } from 'deny-sh-openai-agents';
 import { z } from 'zod';
 
 const getInvoice = denyVaultTool({

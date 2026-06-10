@@ -1,13 +1,13 @@
 /**
- * @deny-sh/openai-agents — wrap a deny.sh vault entry as an OpenAI Agents SDK tool.
+ * deny-sh-openai-agents — wrap a deny.sh vault entry as an OpenAI Agents SDK tool.
  *
  * The credential resolves inside the tool's `execute` boundary; only a narrowed
  * DTO is returned to the model. A fail-closed leak sweep (from
- * @deny-sh/integrations-core) guarantees the raw secret never crosses back into
+ * deny-sh-integrations-core) guarantees the raw secret never crosses back into
  * the model context.
  *
  *   import { Agent, run } from '@openai/agents';
- *   import { denyVaultTool } from '@deny-sh/openai-agents';
+ *   import { denyVaultTool } from 'deny-sh-openai-agents';
  *   import { z } from 'zod';
  *
  *   const getInvoice = denyVaultTool({
@@ -39,7 +39,7 @@ import {
   createVaultResolver,
   type DenyVaultClientOptions,
   type VaultClient,
-} from '@deny-sh/integrations-core';
+} from 'deny-sh-integrations-core';
 
 // Structural type for the schema the Agents SDK `tool()` accepts (a zod v4
 // schema or JSON schema). Kept loose so we don't pin a zod version on the
@@ -114,5 +114,5 @@ export function denyVaultTool<TArgs = Record<string, unknown>, TResult = unknown
   } as any);
 }
 
-export { createVaultResolver, DenyToolError, DenyLeakError, isNarrowed } from '@deny-sh/integrations-core';
-export type { DenyVaultClientOptions, VaultClient } from '@deny-sh/integrations-core';
+export { createVaultResolver, DenyToolError, DenyLeakError, isNarrowed } from 'deny-sh-integrations-core';
+export type { DenyVaultClientOptions, VaultClient } from 'deny-sh-integrations-core';

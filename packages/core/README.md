@@ -1,9 +1,9 @@
-# @deny-sh/integrations-core
+# deny-sh-integrations-core
 
 The framework-agnostic security core behind every [deny.sh](https://deny.sh)
 agent-framework adapter. You normally don't use this directly: install
-[`@deny-sh/langchain`](https://www.npmjs.com/package/@deny-sh/langchain) or
-[`@deny-sh/vercel-ai`](https://www.npmjs.com/package/@deny-sh/vercel-ai) instead.
+[`deny-sh-langchain`](https://www.npmjs.com/package/deny-sh-langchain) or
+[`deny-sh-vercel-ai`](https://www.npmjs.com/package/deny-sh-vercel-ai) instead.
 
 It exposes one primitive, `createVaultResolver`, which:
 
@@ -15,7 +15,7 @@ It exposes one primitive, `createVaultResolver`, which:
    resolver throws and returns nothing. The secret never crosses the boundary.
 
 ```ts
-import { createVaultResolver } from '@deny-sh/integrations-core';
+import { createVaultResolver } from 'deny-sh-integrations-core';
 
 const resolve = createVaultResolver({
   label: 'stripe-prod',

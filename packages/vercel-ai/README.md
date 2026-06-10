@@ -1,4 +1,4 @@
-# @deny-sh/vercel-ai
+# deny-sh-vercel-ai
 
 Wrap a [deny.sh](https://deny.sh) vault entry as a Vercel AI SDK tool. The
 credential resolves inside `execute()`; only a narrowed DTO reaches the model.
@@ -7,7 +7,7 @@ Fail-closed leak sweep.
 Requires AI SDK v5+.
 
 ```bash
-npm install @deny-sh/vercel-ai ai
+npm install deny-sh-vercel-ai ai
 # plus your model provider + zod, e.g.
 npm install @ai-sdk/openai zod
 ```
@@ -18,7 +18,7 @@ npm install @ai-sdk/openai zod
 // app/api/agent/route.ts
 import { generateText, stepCountIs } from 'ai';
 import { openai } from '@ai-sdk/openai';
-import { denyVaultTool } from '@deny-sh/vercel-ai';
+import { denyVaultTool } from 'deny-sh-vercel-ai';
 import { z } from 'zod';
 
 const getInvoice = denyVaultTool({
