@@ -21,7 +21,8 @@
     "build": "tsc -p tsconfig.json",
     "test": "node --test dist-test/test/*.test.js",
     "pretest": "tsc -p tsconfig.test.json",
-    "typecheck": "tsc -p tsconfig.json --noEmit"
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "prepublishOnly": "npm run build && node ../../scripts/prepublish-verify-npm.mjs ."
   },
   "dependencies": {
     "deny-sh": "^2.2.0"
@@ -30,10 +31,23 @@
     "@types/node": "^25.6.2",
     "typescript": "^5.9.3"
   },
-  "keywords": ["deny.sh", "ai-agents", "credential-isolation", "deniable", "vault", "tool-calling"],
+  "keywords": [
+    "deny.sh",
+    "ai-agents",
+    "credential-isolation",
+    "deniable",
+    "vault",
+    "tool-calling"
+  ],
   "homepage": "https://deny.sh/integrations",
-  "repository": { "type": "git", "url": "git+https://github.com/deny-sh-crypto/deny-sh-integrations.git", "directory": "packages/core" },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/deny-sh-crypto/deny-sh-integrations.git",
+    "directory": "packages/core"
+  },
   "license": "Apache-2.0",
   "author": "deny.sh",
-  "engines": { "node": ">=18" }
+  "engines": {
+    "node": ">=18"
+  }
 }
