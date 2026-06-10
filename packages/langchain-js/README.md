@@ -1,11 +1,11 @@
-# @deny-sh/langchain
+# deny-sh-langchain
 
 Wrap a [deny.sh](https://deny.sh) vault entry as a LangChain v1 tool. The
 credential resolves inside the tool boundary; only a narrowed DTO reaches the
 model. Fail-closed leak sweep.
 
 ```bash
-npm install @deny-sh/langchain @langchain/core
+npm install deny-sh-langchain @langchain/core
 # plus your model provider + zod, e.g.
 npm install @langchain/openai langchain zod
 ```
@@ -15,7 +15,7 @@ npm install @langchain/openai langchain zod
 ```ts
 import { createAgent } from 'langchain';
 import { ChatOpenAI } from '@langchain/openai';
-import { denyVaultTool } from '@deny-sh/langchain';
+import { denyVaultTool } from 'deny-sh-langchain';
 import { z } from 'zod';
 
 const invoiceTool = denyVaultTool({

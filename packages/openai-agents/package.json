@@ -1,5 +1,5 @@
 {
-  "name": "@deny-sh/openai-agents",
+  "name": "deny-sh-openai-agents",
   "version": "0.1.0",
   "description": "Wrap a deny.sh vault entry as an OpenAI Agents SDK tool. The credential resolves inside execute(); only a narrowed DTO reaches the model. Fail-closed leak sweep.",
   "type": "module",
@@ -25,7 +25,7 @@
     "prepublishOnly": "npm run build && node ../../scripts/prepublish-verify-npm.mjs ."
   },
   "dependencies": {
-    "@deny-sh/integrations-core": "^0.1.0"
+    "deny-sh-integrations-core": "^0.1.0"
   },
   "peerDependencies": {
     "@openai/agents": ">=0.1 <1"

@@ -1,5 +1,5 @@
 /**
- * @deny-sh/integrations-core — framework-agnostic vault-entry-as-tool builder.
+ * deny-sh-integrations-core — framework-agnostic vault-entry-as-tool builder.
  *
  * Every deny.sh framework adapter (LangChain, Vercel AI SDK, ...) wraps this
  * single resolver. It enforces the deniable/agent-safety contract that the

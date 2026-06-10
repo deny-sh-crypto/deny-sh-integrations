@@ -1,5 +1,5 @@
 {
-  "name": "@deny-sh/integrations-core",
+  "name": "deny-sh-integrations-core",
   "version": "0.1.0",
   "description": "Framework-agnostic vault-entry-as-tool resolver for deny.sh. The shared security core behind every deny.sh agent-framework adapter.",
   "type": "module",

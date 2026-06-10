@@ -1,6 +1,6 @@
 """Framework-agnostic vault-entry-as-tool resolver for deny.sh (Python).
 
-Mirrors @deny-sh/integrations-core. The security contract:
+Mirrors deny-sh-integrations-core. The security contract:
 
 1. The credential is resolved from the deny.sh managed vault and decrypted
    inside this resolver, server-side, via the `deny-sh` SDK.
