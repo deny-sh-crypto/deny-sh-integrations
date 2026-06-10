@@ -8,19 +8,30 @@ credentials, so it is a deliberate human-gated step (Alex).
 
 `@deny-sh/integrations-core` MUST publish first (the adapters depend on it).
 
+## Whitelist gate (automatic, do not skip)
+
+Each package's `prepublishOnly` runs `scripts/prepublish-verify-npm.mjs`, which
+packs the real tarball and resolves the full relative-import graph against
+package.json `files`. `npm publish` ABORTS if any imported `.js` is missing from
+the tarball. This is THE fix for the recurring files-whitelist republish bug
+(core SDK 2.0.6 decoy-engine, 2.2.1 honey.js). It runs automatically; you do not
+invoke it by hand. A red `✗ ... NOT in the tarball` means: fix the `files` array,
+do NOT publish.
+
 ## npm (core → langchain-js → vercel-ai)
 
 ```bash
 NODE_ENV=development npm install --include=dev
 npm run build
-npm run typecheck && npm test          # 22/22 green
+npm run typecheck && npm test          # 45/45 green
 
-# 1. core
+# 1. core  (prepublishOnly gate runs build + whitelist verify automatically)
 cd packages/core && npm publish --access public
 # 2. adapters (after core is live on npm)
 cd ../langchain-js && npm publish --access public
 cd ../vercel-ai && npm publish --access public
 ```
+
 
 Requires an `@deny-sh` npm org and a member/automation token with publish rights.
 
