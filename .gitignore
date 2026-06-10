@@ -13,3 +13,6 @@ __pycache__/
 build/
 .pytest_cache/
 packages/langchain-py/dist/
+
+# auto-backup QA gate flag (qa-guard.sh) — never commit
+.qa-pending
