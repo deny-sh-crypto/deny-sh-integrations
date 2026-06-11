@@ -1,23 +1,23 @@
 # 🚨 NEXT SESSION — START HERE
 
-**PyPI DONE ✅ (2026-06-11 16:16 BST).** Both adapters live + fresh-install-smoke-verified from PyPI:
-- `deny-sh-langchain` 0.1.0 → https://pypi.org/project/deny-sh-langchain/0.1.0/
-- `deny-sh-openai-agents` 0.1.0 → https://pypi.org/project/deny-sh-openai-agents/0.1.0/
-Full export set confirmed in clean venv (deny_vault_tool, create_vault_resolver, is_narrowed, DenyToolError, DenyLeakError). Runtime dep deny-sh>=2.2.0 resolves.
+**PUBLISH MATRIX COMPLETE ✅ (2026-06-11).** All adapters live + fresh-install-smoke-verified on BOTH registries. Nothing left to publish here.
 
-**STILL TO DO:**
+**npm (all 0.1.0, smoke-green incl. T3 zod4 case → zod 4.4.3):**
+- `deny-sh-integrations-core`, `deny-sh-langchain`, `deny-sh-vercel-ai`, `deny-sh-openai-agents`
+- (Packages renamed UNSCOPED per `55e3cc8` — `deny-sh-*`, NOT `@deny-sh/*`. The old scoped names never published; don't be fooled by a stale `npm view @deny-sh/*` 404.)
 
-1. **npm** (strict order, core first): `@deny-sh/integrations-core` → `@deny-sh/langchain` → `@deny-sh/vercel-ai` → `@deny-sh/openai-agents`. Each `prepublishOnly` auto-runs the whitelist gate (can't skip). Needs `@deny-sh` npm org + publish token. NOTE: packages renamed unscoped per `55e3cc8` — verify package.json names before publish (may be `deny-sh-*` not `@deny-sh/*`).
-2. ~~**PyPI**~~ ✅ DONE (see above).
-3. **Post-publish fresh-install smoke per package** (mandatory, PUBLISHING.md). `npm pack --dry-run` is NOT sufficient.
-   - ⚠️ T3 gotcha: `@deny-sh/openai-agents` peers **zod v4** (the LangChain/Vercel adapters use zod v3). The smoke must `npm i @deny-sh/openai-agents @openai/agents zod` (resolves zod4).
-4. After live: optionally add `npm i`/`pip install` snippets to the integration pages in the **core repo** (`web/integrations/*.html`) — but ONLY for a package that is actually published. Never ship a dead install command.
+**PyPI (both 0.1.0, smoke-green):**
+- `deny-sh-langchain` → https://pypi.org/project/deny-sh-langchain/0.1.0/
+- `deny-sh-openai-agents` → https://pypi.org/project/deny-sh-openai-agents/0.1.0/
 
-Separately (also from this morning's audit, human-gated):
-- **deny-rs republish** (branch-oracle fix).
-- **Server deploy** (normal): SSRF + compliance-pack + rate-limits + browser honey list (core commit `3ced3025`).
+**Site reflects it** (deniable-crypto `de8af466`): new `/integrations/openai-agents` page + index card + framework count 8→9 across landing/integrations/docs/whitepaper + sitemap. Dead `deny-integrations` repo link fixed → `deny-sh-integrations`.
 
-Then Alex's EOD goal: sweep website copy + whitepaper + docs to reflect all the new features (browser Honey Mode, /verify proof band, compliance-pack, + the 3 framework adapters).
+**STILL OPEN (carry to broader site audit, not this repo):**
+- Alex's EOD goal: sweep ALL website surfaces to reflect every recent feature (browser Honey Mode, /verify proof band, compliance-pack, framework adapters). Today covered integrations + landing/docs/whitepaper framework-count ONLY. NOT swept: pricing, /agents, /enterprise, /verify, /compare, blog, individual feature pages.
+- **deny-rs republish** (branch-oracle fix) — human-gated, separate.
+- **Server deploy** (SSRF + compliance-pack + rate-limits + browser honey list, core `3ced3025`) — human-gated, separate.
+
+**Future adapter version bumps**: project-scoped PyPI token is enough now (both projects exist). Account-scoped token used for first publish was revoked.
 
 <!-- archived-plan-below -->
 
