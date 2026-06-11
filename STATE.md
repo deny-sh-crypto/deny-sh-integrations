@@ -1,11 +1,14 @@
 # 🚨 NEXT SESSION — START HERE
 
-**PUBLISH the adapters** (Alex bringing a phone hotspot to the desktop, before he leaves for the office). All built, tested, gated GREEN — nothing left to build, this is a publish + post-publish-smoke job.
+**PyPI DONE ✅ (2026-06-11 16:16 BST).** Both adapters live + fresh-install-smoke-verified from PyPI:
+- `deny-sh-langchain` 0.1.0 → https://pypi.org/project/deny-sh-langchain/0.1.0/
+- `deny-sh-openai-agents` 0.1.0 → https://pypi.org/project/deny-sh-openai-agents/0.1.0/
+Full export set confirmed in clean venv (deny_vault_tool, create_vault_resolver, is_narrowed, DenyToolError, DenyLeakError). Runtime dep deny-sh>=2.2.0 resolves.
 
-Publish order + exact commands + smokes: **`PUBLISHING.md`** (authoritative).
+**STILL TO DO:**
 
-1. **npm** (strict order, core first): `@deny-sh/integrations-core` → `@deny-sh/langchain` → `@deny-sh/vercel-ai` → `@deny-sh/openai-agents`. Each `prepublishOnly` auto-runs the whitelist gate (can't skip). Needs `@deny-sh` npm org + publish token.
-2. **PyPI**: `deny-sh-langchain` + `deny-sh-openai-agents` (`python -m build` + `twine upload dist/*`). Needs the PyPI projects + tokens.
+1. **npm** (strict order, core first): `@deny-sh/integrations-core` → `@deny-sh/langchain` → `@deny-sh/vercel-ai` → `@deny-sh/openai-agents`. Each `prepublishOnly` auto-runs the whitelist gate (can't skip). Needs `@deny-sh` npm org + publish token. NOTE: packages renamed unscoped per `55e3cc8` — verify package.json names before publish (may be `deny-sh-*` not `@deny-sh/*`).
+2. ~~**PyPI**~~ ✅ DONE (see above).
 3. **Post-publish fresh-install smoke per package** (mandatory, PUBLISHING.md). `npm pack --dry-run` is NOT sufficient.
    - ⚠️ T3 gotcha: `@deny-sh/openai-agents` peers **zod v4** (the LangChain/Vercel adapters use zod v3). The smoke must `npm i @deny-sh/openai-agents @openai/agents zod` (resolves zod4).
 4. After live: optionally add `npm i`/`pip install` snippets to the integration pages in the **core repo** (`web/integrations/*.html`) — but ONLY for a package that is actually published. Never ship a dead install command.
