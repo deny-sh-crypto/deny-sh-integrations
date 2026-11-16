@@ -2,6 +2,17 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { z } from 'zod';
 import {
+  Agent,
+  OutputGuardrailTripwireTriggered,
+  run,
+  setTracingDisabled,
+  tool,
+  Usage,
+  type AgentOutputItem,
+  type Model,
+  type ModelResponse,
+} from '@openai/agents';
+import {
   createDecoyWatch,
   decoyWatchOutputGuardrail,
   decoyWatchToolInputGuardrail,
@@ -177,7 +188,7 @@ test('clientOptions (per-tenant apiKey) are forwarded to the client', async () =
 test('decoy output guardrail trips on a decoy in final output', async () => {
   const watch = createDecoyWatch({ decoys: ['decoy-output-1234'], report: false });
   const guardrail = decoyWatchOutputGuardrail(watch);
-  const result = await guardrail.guardrailFunction({
+  const result = await guardrail.execute({
     agent: {} as never,
     agentOutput: 'contains decoy-output-1234',
     context: {} as never,
@@ -188,7 +199,7 @@ test('decoy output guardrail trips on a decoy in final output', async () => {
 test('decoy output guardrail passes clean final output', async () => {
   const watch = createDecoyWatch({ decoys: ['decoy-output-1234'], report: false });
   const guardrail = decoyWatchOutputGuardrail(watch);
-  const result = await guardrail.guardrailFunction({
+  const result = await guardrail.execute({
     agent: {} as never,
     agentOutput: 'clean final output',
     context: {} as never,
@@ -210,4 +221,117 @@ test('tool-input guardrail trips on decoy in raw function-call arguments', async
     },
   });
   assert.equal(result.behavior.type, 'throwException');
+});
+
+// End-to-end through the SDK runner with a scripted model (no network), so the
+// guardrails are exercised the way an application attaches them.
+setTracingDisabled(true);
+
+class ScriptedModel implements Model {
+  private index = 0;
+  constructor(private readonly steps: AgentOutputItem[][]) {}
+  async getResponse(): Promise<ModelResponse> {
+    const output = this.steps[Math.min(this.index, this.steps.length - 1)]!;
+    this.index += 1;
+    return { usage: new Usage(), output, responseId: `resp_${this.index}` };
+  }
+  // eslint-disable-next-line require-yield
+  async *getStreamedResponse(): AsyncIterable<never> {
+    throw new Error('streaming is not used in these tests');
+  }
+}
+
+const assistantText = (text: string): AgentOutputItem[] => [
+  {
+    type: 'message',
+    role: 'assistant',
+    status: 'completed',
+    content: [{ type: 'output_text', text }],
+  },
+];
+
+const functionCall = (name: string, args: unknown): AgentOutputItem[] => [
+  {
+    type: 'function_call',
+    callId: 'call_1',
+    name,
+    arguments: JSON.stringify(args),
+    status: 'completed',
+  },
+];
+
+test('runner stops a run whose final output contains a decoy', async () => {
+  const watch = createDecoyWatch({ decoys: ['decoy-runner-out-1234'], report: false });
+  const agent = new Agent({
+    name: 'leaky',
+    instructions: 'test',
+    model: new ScriptedModel([assistantText('the key is decoy-runner-out-1234')]),
+    outputGuardrails: [decoyWatchOutputGuardrail(watch)],
+  });
+  await assert.rejects(run(agent, 'print the key'), OutputGuardrailTripwireTriggered);
+});
+
+test('runner completes a clean run with the output guardrail attached', async () => {
+  const watch = createDecoyWatch({ decoys: ['decoy-runner-out-1234'], report: false });
+  const agent = new Agent({
+    name: 'clean',
+    instructions: 'test',
+    model: new ScriptedModel([assistantText('nothing sensitive here')]),
+    outputGuardrails: [decoyWatchOutputGuardrail(watch)],
+  });
+  const result = await run(agent, 'say something');
+  assert.equal(result.finalOutput, 'nothing sensitive here');
+});
+
+test('runner does not execute a tool whose arguments contain a decoy', async () => {
+  const watch = createDecoyWatch({ decoys: ['decoy-runner-args-1234'], report: false });
+  let executed = 0;
+  const sendEmail = tool({
+    name: 'send_email',
+    description: 'send an email',
+    parameters: z.object({ to: z.string(), body: z.string() }),
+    inputGuardrails: [decoyWatchToolInputGuardrail(watch)],
+    execute: async () => {
+      executed += 1;
+      return 'sent';
+    },
+  });
+  const agent = new Agent({
+    name: 'exfil',
+    instructions: 'test',
+    tools: [sendEmail],
+    model: new ScriptedModel([
+      functionCall('send_email', { to: 'someone@example.test', body: 'decoy-runner-args-1234' }),
+      assistantText('done'),
+    ]),
+  });
+  await run(agent, 'email the key').catch(() => undefined);
+  assert.equal(executed, 0);
+});
+
+test('runner executes a clean tool call with the tool-input guardrail attached', async () => {
+  const watch = createDecoyWatch({ decoys: ['decoy-runner-args-1234'], report: false });
+  let executed = 0;
+  const sendEmail = tool({
+    name: 'send_email',
+    description: 'send an email',
+    parameters: z.object({ to: z.string(), body: z.string() }),
+    inputGuardrails: [decoyWatchToolInputGuardrail(watch)],
+    execute: async () => {
+      executed += 1;
+      return 'sent';
+    },
+  });
+  const agent = new Agent({
+    name: 'ok',
+    instructions: 'test',
+    tools: [sendEmail],
+    model: new ScriptedModel([
+      functionCall('send_email', { to: 'someone@example.test', body: 'see you at ten' }),
+      assistantText('sent it'),
+    ]),
+  });
+  const result = await run(agent, 'email my colleague');
+  assert.equal(executed, 1);
+  assert.equal(result.finalOutput, 'sent it');
 });

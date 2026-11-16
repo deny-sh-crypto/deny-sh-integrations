@@ -35,11 +35,11 @@
  */
 
 import {
-  defineOutputGuardrail,
   defineToolInputGuardrail,
   ToolGuardrailFunctionOutputFactory,
   tool,
 } from '@openai/agents';
+import type { OutputGuardrail } from '@openai/agents';
 import {
   createVaultResolver,
   DenyDecoyLeakError,
@@ -128,8 +128,10 @@ export function denyVaultTool<TArgs = Record<string, unknown>, TResult = unknown
  * sees the final output value supplied by the SDK; it cannot join a decoy split
  * across messages or detect transformations unsupported by the core watch.
  */
-export function decoyWatchOutputGuardrail(watch: DecoyWatch) {
-  return defineOutputGuardrail({
+export function decoyWatchOutputGuardrail(watch: DecoyWatch): OutputGuardrail {
+  // `Agent.outputGuardrails` takes the plain `{ name, execute }` shape; the
+  // runner wraps each entry itself, so a pre-defined guardrail is not accepted.
+  return {
     name: 'deny_decoy_watch_output',
     execute: async ({ agentOutput }) => {
       try {
@@ -145,7 +147,7 @@ export function decoyWatchOutputGuardrail(watch: DecoyWatch) {
         throw error;
       }
     },
-  });
+  };
 }
 
 /**
