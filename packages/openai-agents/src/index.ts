@@ -39,7 +39,7 @@ import {
   ToolGuardrailFunctionOutputFactory,
   tool,
 } from '@openai/agents';
-import type { OutputGuardrail } from '@openai/agents';
+import type { AgentOutputType, OutputGuardrail, TextOutput, UnknownContext } from '@openai/agents';
 import {
   createVaultResolver,
   DenyDecoyLeakError,
@@ -124,11 +124,16 @@ export function denyVaultTool<TArgs = Record<string, unknown>, TResult = unknown
 /**
  * Create an Agents SDK output guardrail for final agent output.
  *
- * Pass the result in `new Agent({ outputGuardrails: [...] })`. Detection only
+ * Pass the result in `new Agent({ outputGuardrails: [...] })`. For an agent
+ * with a structured `outputType`, pass that type explicitly:
+ * `decoyWatchOutputGuardrail<typeof Schema>(watch)`. Detection only
  * sees the final output value supplied by the SDK; it cannot join a decoy split
  * across messages or detect transformations unsupported by the core watch.
  */
-export function decoyWatchOutputGuardrail(watch: DecoyWatch): OutputGuardrail {
+export function decoyWatchOutputGuardrail<
+  TOutput extends AgentOutputType = TextOutput,
+  TContext = UnknownContext,
+>(watch: DecoyWatch): OutputGuardrail<TOutput, TContext> {
   // `Agent.outputGuardrails` takes the plain `{ name, execute }` shape; the
   // runner wraps each entry itself, so a pre-defined guardrail is not accepted.
   return {

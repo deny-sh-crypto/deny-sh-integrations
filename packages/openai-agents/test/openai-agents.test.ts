@@ -335,3 +335,16 @@ test('runner executes a clean tool call with the tool-input guardrail attached',
   assert.equal(executed, 1);
   assert.equal(result.finalOutput, 'sent it');
 });
+
+test('output guardrail attaches to a structured-output agent and scans the parsed object', async () => {
+  const Answer = z.object({ answer: z.string() });
+  const watch = createDecoyWatch({ decoys: ['decoy-structured-1234'], report: false });
+  const agent = new Agent({
+    name: 'structured',
+    instructions: 'test',
+    outputType: Answer,
+    model: new ScriptedModel([assistantText(JSON.stringify({ answer: 'decoy-structured-1234' }))]),
+    outputGuardrails: [decoyWatchOutputGuardrail<typeof Answer>(watch)],
+  });
+  await assert.rejects(run(agent, 'answer'), OutputGuardrailTripwireTriggered);
+});

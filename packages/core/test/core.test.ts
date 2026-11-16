@@ -1,5 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import {
   createDecoyWatch,
   createVaultResolver,
@@ -9,6 +10,11 @@ import {
   DenyLeakError,
   type VaultClient,
 } from '../src/index.js';
+
+// The reported source string must track the package manifest version.
+const PACKAGE_VERSION = (
+  JSON.parse(readFileSync(new URL('../../package.json', import.meta.url), 'utf8')) as { version: string }
+).version;
 
 // A fake secret that is obviously not a real key (scanner-safe).
 const FAKE_SECRET = 'sk_test_DENYFAKE_0000_not_a_real_key';
@@ -367,7 +373,7 @@ test('decoy report carries only fingerprint, surface, and source', async () => {
   assert.deepEqual(body, {
     tripwire_hash: watch.fingerprints()[0],
     surface: 'model_output',
-    source: 'deny-sh-integrations-core/0.2.0',
+    source: `deny-sh-integrations-core/${PACKAGE_VERSION}`,
   });
   assert.ok(!bodyText.includes(DECOY));
   assert.equal((calls[0]?.init?.headers as Record<string, string>).Authorization, 'Bearer test-key');
@@ -569,4 +575,67 @@ test('report false and unresolved API key make check network-free', async () => 
   await explicitOff.check(DECOY);
   await noKey.check(DECOY);
   assert.equal(calls, 0);
+});
+
+test('decoy watch detects percent-encoding variants', () => {
+  const decoy = 'decoy key?=A/b 1234';
+  const watch = createDecoyWatch({ decoys: [decoy], report: false });
+  const upper = encodeURIComponent(decoy);
+  const lower = upper.replace(/%[0-9A-F]{2}/g, (m) => m.toLowerCase());
+  const full = [...Buffer.from(decoy, 'utf8')].map((b) => `%${b.toString(16).padStart(2, '0')}`).join('');
+  const form = upper.replace(/%20/g, '+');
+  for (const variant of [upper, lower, full, form]) {
+    const hits = watch.scan(`https://example.test/?q=${variant}&x=1`, 'tool_args');
+    assert.equal(hits.length, 1, variant);
+    assert.equal(hits[0]?.encoding, 'percent', variant);
+  }
+  assert.equal(watch.scan('https://example.test/?q=100%25+safe&x=1').length, 0);
+});
+
+test('decoy watch reads getters once per scan regardless of decoy count', () => {
+  let reads = 0;
+  const carrier = {
+    get field() {
+      reads += 1;
+      return 'nothing here';
+    },
+  };
+  const watch = createDecoyWatch({
+    decoys: ['decoy-count-one-1234', 'decoy-count-two-1234', 'decoy-count-three-1234'],
+    report: false,
+  });
+  assert.equal(watch.scan(carrier).length, 0);
+  assert.equal(reads, 1);
+});
+
+test('decoy watch rejects a label that contains the decoy value', () => {
+  assert.throws(
+    () => createDecoyWatch({ decoys: [{ label: 'my decoy-label-leak-1234', value: 'decoy-label-leak-1234' }], report: false }),
+    (error: unknown) => error instanceof DenyToolError && !String((error as Error).message).includes('decoy-label-leak-1234'),
+  );
+});
+
+test('a never-settling onReportError does not hold check()', async () => {
+  const watch = createDecoyWatch({
+    decoys: ['decoy-observer-hang-1234'],
+    clientOptions: { apiKey: 'test-key', baseUrl: 'https://example.invalid/api' },
+    block: false,
+    reportTimeoutMs: 50,
+    fetch: (async () => new Response('{}', { status: 500 })) as typeof fetch,
+    onReportError: () => new Promise<void>(() => undefined) as unknown as void,
+  });
+  const started = Date.now();
+  const hits = await watch.check('x decoy-observer-hang-1234', 'model_output');
+  assert.equal(hits.length, 1);
+  assert.ok(Date.now() - started < 1000);
+});
+
+test('arm() fails with a timeout when fetch ignores the abort signal', async () => {
+  const watch = createDecoyWatch({
+    decoys: ['decoy-arm-hang-1234'],
+    clientOptions: { apiKey: 'test-key', baseUrl: 'https://example.invalid/api' },
+    reportTimeoutMs: 50,
+    fetch: (() => new Promise<Response>(() => undefined)) as typeof fetch,
+  });
+  await assert.rejects(watch.arm(), (error: unknown) => error instanceof DenyToolError && error.code === 'deny_timeout');
 });

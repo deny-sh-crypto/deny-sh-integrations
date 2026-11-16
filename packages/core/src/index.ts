@@ -271,7 +271,10 @@ interface NormalizedDecoy {
   label?: string;
   value: string;
   fingerprint: string;
-  encodings: Array<{ encoding: Exclude<DecoyEncoding, 'spaced'>; variants: string[] }>;
+  hasWhitespace: boolean;
+  base64: string[];
+  base64url: string[];
+  hex: string;
 }
 
 const DEFAULT_API_BASE_URL = 'https://deny.sh/api';
@@ -288,44 +291,84 @@ function normalizeDecoy(entry: string | { label?: string; value: string }): Norm
   if (typeof value !== 'string' || value.length < 8) {
     throw new DenyToolError('deny_config_error', 'Every decoy value must be a string of at least 8 characters.');
   }
+  if (typeof label === 'string' && label.includes(value)) {
+    // Labels travel in hits and in the arming request; the decoy value must not.
+    throw new DenyToolError('deny_config_error', 'A decoy label must not contain the decoy value.');
+  }
   const base64 = Buffer.from(value, 'utf8').toString('base64');
   const base64urlPadded = base64.replace(/\+/g, '-').replace(/\//g, '_');
-  const percent = encodeURIComponent(value);
   return {
     label,
     value,
     fingerprint: decoyFingerprint(value),
-    encodings: [
-      { encoding: 'plain', variants: [value] },
-      { encoding: 'base64', variants: [...new Set([base64, base64.replace(/=+$/, '')])] },
-      {
-        encoding: 'base64url',
-        variants: [...new Set([base64urlPadded, base64urlPadded.replace(/=+$/, '')])],
-      },
-      { encoding: 'hex', variants: [Buffer.from(value, 'utf8').toString('hex')] },
-      ...(percent === value
-        ? []
-        : [{ encoding: 'percent' as const, variants: [percent] }]),
-    ],
+    hasWhitespace: /\s/.test(value),
+    base64: [...new Set([base64, base64.replace(/=+$/, '')])],
+    base64url: [...new Set([base64urlPadded, base64urlPadded.replace(/=+$/, '')])],
+    hex: Buffer.from(value, 'utf8').toString('hex'),
   };
 }
 
-function matchingEncoding(value: unknown, decoy: NormalizedDecoy): DecoyEncoding | undefined {
-  for (const candidate of decoy.encodings) {
-    const matched = valueContains(
-      value,
-      (text) =>
-        candidate.encoding === 'hex'
-          ? candidate.variants.some((variant) => text.toLowerCase().includes(variant))
-          : candidate.variants.some((variant) => text.includes(variant)),
-      new WeakSet(),
-    );
-    if (matched) return candidate.encoding;
-  }
+/** One scanned string with each normalised form computed once. */
+interface ScanText {
+  raw: string;
+  lower: string;
+  /** Percent-decoded form (any hex case, partial or full escaping), when it differs. */
+  percentDecoded?: string;
+  /** As `percentDecoded` (or raw) with form-style `+` read as a space, when it differs. */
+  formDecoded?: string;
+  unspaced: string;
+}
+
+function percentDecode(text: string): string {
+  if (!text.includes('%')) return text;
+  return text.replace(/(?:%[0-9a-fA-F]{2})+/g, (run) =>
+    Buffer.from(run.replace(/%/g, ''), 'hex').toString('utf8'),
+  );
+}
+
+/**
+ * Walk the value ONCE (same traversal rules as the vault leak sweep) and
+ * prepare every string it carries. Getters and custom toString run once per
+ * scan regardless of how many decoys are configured.
+ */
+function collectScanTexts(value: unknown): ScanText[] {
+  const raws: string[] = [];
+  valueContains(
+    value,
+    (text) => {
+      if (text.length > 0) raws.push(text);
+      return false;
+    },
+    new WeakSet(),
+  );
+  return raws.map((raw) => {
+    const decoded = percentDecode(raw);
+    const form = decoded.includes('+') ? decoded.replace(/\+/g, ' ') : decoded;
+    return {
+      raw,
+      lower: raw.toLowerCase(),
+      ...(decoded === raw ? {} : { percentDecoded: decoded }),
+      ...(form === raw ? {} : { formDecoded: form }),
+      unspaced: /\s/.test(raw) ? raw.replace(/\s/g, '') : raw,
+    };
+  });
+}
+
+function matchingEncoding(texts: ScanText[], decoy: NormalizedDecoy): DecoyEncoding | undefined {
+  if (texts.some((t) => t.raw.includes(decoy.value))) return 'plain';
+  if (texts.some((t) => decoy.base64.some((v) => t.raw.includes(v)))) return 'base64';
+  if (texts.some((t) => decoy.base64url.some((v) => t.raw.includes(v)))) return 'base64url';
+  if (texts.some((t) => t.lower.includes(decoy.hex))) return 'hex';
   if (
-    !/\s/.test(decoy.value) &&
-    valueContains(value, (text) => text.replace(/\s/g, '').includes(decoy.value), new WeakSet())
+    texts.some(
+      (t) =>
+        (t.percentDecoded !== undefined && t.percentDecoded.includes(decoy.value)) ||
+        (decoy.hasWhitespace && t.formDecoded !== undefined && t.formDecoded.includes(decoy.value)),
+    )
   ) {
+    return 'percent';
+  }
+  if (!decoy.hasWhitespace && texts.some((t) => t.unspaced !== t.raw && t.unspaced.includes(decoy.value))) {
     return 'spaced';
   }
   return undefined;
@@ -333,6 +376,8 @@ function matchingEncoding(value: unknown, decoy: NormalizedDecoy): DecoyEncoding
 
 async function settleWithin<T>(promise: Promise<T>, timeoutMs: number): Promise<T | undefined> {
   let timeout: ReturnType<typeof setTimeout> | undefined;
+  // A promise that loses the race may still reject later; keep that handled.
+  promise.catch(() => undefined);
   try {
     return await Promise.race([
       promise,
@@ -348,9 +393,15 @@ async function settleWithin<T>(promise: Promise<T>, timeoutMs: number): Promise<
 /**
  * Build a decoy detector for values crossing an agent boundary.
  *
- * Detection only sees values passed to `scan` or `check`. It does not detect a
- * decoy split across separate messages, embedded part-way inside a larger
- * encoded blob, or otherwise transformed beyond the documented encodings.
+ * Detection only sees values passed to `scan` or `check`. Recognised forms of
+ * a decoy: plain text; base64 and base64url of the whole decoy; hex (any
+ * case); percent-encoding (any hex case, partly or fully escaped, with `+`
+ * read as a space for decoys that contain spaces); and plain text with
+ * whitespace inserted. It does not detect a decoy split across separate
+ * messages, embedded part-way inside a larger encoded blob, nested encodings,
+ * or any other transformation. Every scan walks the whole value once and
+ * copies each string a small constant number of times; callers that pass very
+ * large values should bound them first.
  */
 export function createDecoyWatch(config: DecoyWatchConfig): DecoyWatch {
   if (!config || !Array.isArray(config.decoys)) {
@@ -380,8 +431,9 @@ export function createDecoyWatch(config: DecoyWatchConfig): DecoyWatch {
 
   const scan = (value: unknown, surface: DecoySurface = 'other'): DecoyHit[] => {
     const hits: DecoyHit[] = [];
+    const texts = collectScanTexts(value);
     for (const decoy of decoys) {
-      const encoding = matchingEncoding(value, decoy);
+      const encoding = matchingEncoding(texts, decoy);
       if (encoding) {
         hits.push({
           ...(decoy.label === undefined ? {} : { label: decoy.label }),
@@ -428,8 +480,13 @@ export function createDecoyWatch(config: DecoyWatchConfig): DecoyWatch {
   const notifyReportError = async (
     info: Parameters<NonNullable<DecoyWatchConfig['onReportError']>>[0],
   ): Promise<void> => {
+    if (!config.onReportError) return;
     try {
-      await config.onReportError?.(info);
+      // Bounded: an observer that never settles must not hold the agent path.
+      await settleWithin(
+        Promise.resolve().then(() => config.onReportError?.(info)),
+        reportTimeoutMs,
+      );
     } catch {
       // Error-observer failures must never disrupt the agent path.
     }
@@ -504,11 +561,19 @@ export function createDecoyWatch(config: DecoyWatchConfig): DecoyWatch {
     },
     async arm(): Promise<{ armed: number }> {
       for (const decoy of decoys) {
-        const response = await post('/v1/decoy-tripwires', {
-          tripwire_hash: decoy.fingerprint,
-          tripwire_kind: 'plaintext',
-          ...(decoy.label === undefined ? {} : { label: decoy.label }),
-        });
+        // Hard timeout as well as the abort signal: a fetch implementation that
+        // ignores AbortSignal must not leave arm() pending.
+        const response = await settleWithin(
+          post('/v1/decoy-tripwires', {
+            tripwire_hash: decoy.fingerprint,
+            tripwire_kind: 'plaintext',
+            ...(decoy.label === undefined ? {} : { label: decoy.label }),
+          }),
+          reportTimeoutMs,
+        );
+        if (!response) {
+          throw new DenyToolError('deny_timeout', 'deny.sh did not respond while arming a decoy tripwire.');
+        }
         if (!response.ok) {
           throw new DenyToolError(
             'deny_http_error',
