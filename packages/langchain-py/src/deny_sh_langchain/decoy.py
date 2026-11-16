@@ -279,7 +279,10 @@ def _run_bounded(call: Callable[[], Any], timeout: float) -> Tuple[bool, Any]:
 
     def run() -> None:
         try:
-            result_queue.put((True, call()))
+            result = call()
+            if inspect.isawaitable(result):
+                result = asyncio.run(result)
+            result_queue.put((True, result))
         except BaseException as error:  # noqa: BLE001 - transported to caller
             result_queue.put((False, error))
 
