@@ -2,6 +2,7 @@ import asyncio
 import http.server
 import json
 import threading
+import time
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -275,6 +276,29 @@ def test_block_false_returns_all_hits_and_calls_on_leak_once_each():
     hits = watch.check(DECOY + " second-decoy-5678", "tool_args")
     assert len(hits) == 2
     assert seen == hits
+
+
+def test_check_uses_one_deadline_and_calls_fast_callbacks_for_all_hits():
+    decoys = [f"decoy-value-{index:04d}" for index in range(20)]
+    seen = []
+
+    def slow_transport(*_args):
+        time.sleep(2)
+        return 200
+
+    watch = create_decoy_watch(
+        decoys,
+        api_key="test-key",
+        report_timeout=0.5,
+        transport=slow_transport,
+        on_leak=seen.append,
+    )
+    started = time.monotonic()
+    with pytest.raises(DenyDecoyLeakError):
+        watch.check(" ".join(decoys), "tool_args")
+    elapsed = time.monotonic() - started
+    assert elapsed < 1.5
+    assert {hit.fingerprint for hit in seen} == set(watch.fingerprints())
 
 
 def test_arm_posts_plaintext_tripwire_per_fingerprint():

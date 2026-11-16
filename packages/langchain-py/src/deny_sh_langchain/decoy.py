@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import concurrent.futures
 import hashlib
 import inspect
 import json
@@ -11,6 +12,7 @@ import os
 import queue
 import re
 import threading
+import time
 import warnings
 from dataclasses import dataclass, fields, is_dataclass
 from typing import Any, Callable, Dict, List, Literal, Mapping, Optional, Sequence, Tuple
@@ -508,7 +510,9 @@ class DecoyWatch:
             return
         _run_bounded(lambda: self._on_report_error(info), self._report_timeout)
 
-    def _post(self, path: str, body: Dict[str, Any]) -> int:
+    def _post(
+        self, path: str, body: Dict[str, Any], *, bounded: bool = True
+    ) -> int:
         if not self._api_key:
             raise DenyToolError(
                 "deny_config_error",
@@ -520,17 +524,18 @@ class DecoyWatch:
             "Accept": "application/json",
             "Content-Type": "application/json",
         }
-        completed, result = _run_bounded(
-            lambda: self._transport(
+        call = lambda: self._transport(
                 self._v1_base + path,
                 headers,
                 payload,
                 self._report_timeout,
-            ),
-            self._report_timeout,
-        )
-        if not completed:
-            raise result
+            )
+        if bounded:
+            completed, result = _run_bounded(call, self._report_timeout)
+            if not completed:
+                raise result
+        else:
+            result = call()
         if isinstance(result, int):
             return result
         status = getattr(result, "status", None)
@@ -544,7 +549,7 @@ class DecoyWatch:
             text = text.replace(decoy.value, "[deny:redacted]")
         return text
 
-    def _report_hit(self, hit: DecoyHit) -> None:
+    def _report_hit(self, hit: DecoyHit, deadline: float) -> None:
         if not self._report:
             return
         try:
@@ -555,7 +560,10 @@ class DecoyWatch:
                     "surface": hit.surface,
                     "source": _DECOY_SOURCE,
                 },
+                bounded=False,
             )
+            if time.monotonic() >= deadline:
+                return
             if not 200 <= status < 300:
                 self._notify_report_error(
                     {
@@ -565,6 +573,8 @@ class DecoyWatch:
                     }
                 )
         except TimeoutError:
+            if time.monotonic() >= deadline:
+                return
             self._notify_report_error(
                 {
                     "fingerprint": hit.fingerprint,
@@ -573,6 +583,8 @@ class DecoyWatch:
                 }
             )
         except BaseException as error:  # noqa: BLE001 - reporting never escapes
+            if time.monotonic() >= deadline:
+                return
             self._notify_report_error(
                 {
                     "fingerprint": hit.fingerprint,
@@ -583,10 +595,32 @@ class DecoyWatch:
 
     def check(self, value: Any, surface: DecoySurface = "other") -> List[DecoyHit]:
         hits = self.scan(value, surface)
-        for hit in hits:
-            if self._on_leak is not None:
-                _run_bounded(lambda hit=hit: self._on_leak(hit), self._report_timeout)
-            self._report_hit(hit)
+        deadline = time.monotonic() + self._report_timeout
+        executor = concurrent.futures.ThreadPoolExecutor(max_workers=8)
+        futures: List[concurrent.futures.Future[Any]] = []
+
+        def notify_leak(hit: DecoyHit) -> None:
+            if self._on_leak is None:
+                return
+            try:
+                result = self._on_leak(hit)
+                if inspect.isawaitable(result):
+                    asyncio.run(result)
+            except BaseException:  # noqa: BLE001 - callbacks never escape
+                return
+
+        try:
+            futures.extend(executor.submit(notify_leak, hit) for hit in hits)
+            futures.extend(
+                executor.submit(self._report_hit, hit, deadline) for hit in hits
+            )
+            concurrent.futures.wait(
+                futures, timeout=max(0.0, deadline - time.monotonic())
+            )
+        finally:
+            for future in futures:
+                future.cancel()
+            executor.shutdown(wait=False, cancel_futures=True)
         if self._block and hits:
             raise DenyDecoyLeakError(hits)
         return hits
