@@ -483,7 +483,10 @@ def _default_transport(
     url: str, headers: Dict[str, str], body: bytes, timeout: float
 ) -> int:
     req = request.Request(url, data=body, headers=headers, method="POST")
-    opener = request.build_opener(_NoRedirectHandler())
+    if urlsplit(url).scheme.lower() == "http":
+        opener = request.build_opener(request.ProxyHandler({}), _NoRedirectHandler())
+    else:
+        opener = request.build_opener(_NoRedirectHandler())
     try:
         with opener.open(req, timeout=timeout) as response:  # noqa: S310
             return int(response.status)
@@ -809,12 +812,23 @@ def create_decoy_watch(
     try:
         parsed_base_url = urlsplit(resolved_base_url)
         scheme = parsed_base_url.scheme.lower()
-        hostname = parsed_base_url.hostname
+        hostname = (parsed_base_url.hostname or "").lower()
+        if hostname.endswith("."):
+            hostname = hostname[:-1]
+        has_userinfo = (
+            parsed_base_url.username is not None
+            or parsed_base_url.password is not None
+        )
     except Exception:
         scheme = ""
-        hostname = None
-    if scheme != "https" and not (
-        scheme == "http" and hostname in {"localhost", "127.0.0.1", "::1"}
+        hostname = ""
+        has_userinfo = False
+    if has_userinfo or (
+        scheme != "https"
+        and not (
+            scheme == "http"
+            and hostname in {"localhost", "127.0.0.1", "::1"}
+        )
     ):
         raise DenyToolError(
             "deny_config_error",

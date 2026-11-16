@@ -259,6 +259,64 @@ def test_non_https_base_url_rejected_except_loopback():
     create_decoy_watch(
         [DECOY], base_url="http://127.0.0.1:12345", report=False
     )
+    create_decoy_watch([DECOY], base_url="HTTP://LOCALHOST:1/api", report=False)
+    with pytest.raises(DenyToolError):
+        create_decoy_watch(
+            [DECOY], base_url="http://localhost.evil.com", report=False
+        )
+    with pytest.raises(DenyToolError):
+        create_decoy_watch(
+            [DECOY], base_url="https://user:pw@deny.sh/api", report=False
+        )
+
+
+def test_loopback_http_transport_ignores_environment_proxy(monkeypatch):
+    requests_seen = {"real": 0, "proxy": 0}
+
+    class RealHandler(http.server.BaseHTTPRequestHandler):
+        def do_POST(self):
+            requests_seen["real"] += 1
+            self.send_response(204)
+            self.end_headers()
+
+        def log_message(self, *_args):
+            pass
+
+    class ProxyHandler(http.server.BaseHTTPRequestHandler):
+        def do_POST(self):
+            requests_seen["proxy"] += 1
+            self.send_response(502)
+            self.end_headers()
+
+        def log_message(self, *_args):
+            pass
+
+    real = http.server.ThreadingHTTPServer(("127.0.0.1", 0), RealHandler)
+    proxy = http.server.ThreadingHTTPServer(("127.0.0.1", 0), ProxyHandler)
+    threads = [
+        threading.Thread(target=server.serve_forever, daemon=True)
+        for server in (real, proxy)
+    ]
+    for thread in threads:
+        thread.start()
+    monkeypatch.setenv("HTTP_PROXY", f"http://127.0.0.1:{proxy.server_port}")
+    monkeypatch.setenv("http_proxy", f"http://127.0.0.1:{proxy.server_port}")
+    monkeypatch.delenv("NO_PROXY", raising=False)
+    monkeypatch.delenv("no_proxy", raising=False)
+    try:
+        watch = create_decoy_watch(
+            [DECOY],
+            api_key="test-key",
+            base_url=f"http://127.0.0.1:{real.server_port}/api",
+            block=False,
+        )
+        watch.check(DECOY)
+    finally:
+        real.shutdown()
+        proxy.shutdown()
+        real.server_close()
+        proxy.server_close()
+    assert requests_seen == {"real": 1, "proxy": 0}
 
 
 def test_default_transport_does_not_follow_redirects():
