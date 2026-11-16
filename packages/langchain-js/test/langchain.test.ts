@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { RunnableLambda } from '@langchain/core/runnables';
-import { tool } from '@langchain/core/tools';
+import { StructuredTool, tool } from '@langchain/core/tools';
 import { ToolMessage } from '@langchain/core/messages';
 import { z } from 'zod';
 import {
@@ -386,4 +386,47 @@ test('tool-input wrapper block:false executes and reports one hit', async () => 
   assert.equal(executions, 1);
   assert.equal(hits.length, 1);
   assert.equal(hits[0]?.surface, 'tool_args');
+});
+
+test('tool-input wrapper preserves private-field receivers and guards direct _call', async () => {
+  const decoy = 'decoy-langchain-private-1234';
+  class PrivateTool extends StructuredTool {
+    name = 'private_tool';
+    description = 'Private field tool';
+    schema = z.object({ value: z.string() });
+    #prefix = 'private';
+    get marker() { return this.#prefix; }
+    protected async _call({ value }: { value: string }) { return `${this.#prefix}:${value}`; }
+  }
+  const guarded = decoyWatchToolInput(
+    createDecoyWatch({ decoys: [decoy], report: false }),
+    new PrivateTool(),
+  ) as PrivateTool;
+  assert.equal(guarded.marker, 'private');
+  assert.equal(await guarded.invoke({ value: 'clean' }), 'private:clean');
+  await assert.rejects(
+    () => (guarded as unknown as { _call: (input: unknown) => Promise<unknown> })._call({ value: decoy }),
+    DenyDecoyLeakError,
+  );
+});
+
+test('tool-input wrapper guards func and Runnable helper paths', async () => {
+  const decoy = 'decoy-langchain-helper-1234';
+  let executions = 0;
+  const inner = tool(async ({ value }: { value: string }) => {
+    executions += 1;
+    return value;
+  }, {
+    name: 'helper_tool', description: 'Runnable helpers', schema: z.object({ value: z.string() }),
+  });
+  const guarded = decoyWatchToolInput(
+    createDecoyWatch({ decoys: [decoy], report: false }),
+    inner,
+  ) as typeof inner;
+  assert.ok(guarded instanceof StructuredTool);
+  await assert.rejects(() => guarded.func({ value: decoy }), DenyDecoyLeakError);
+  await assert.rejects(() => guarded.batch([{ value: decoy }]), DenyDecoyLeakError);
+  await assert.rejects(() => guarded.stream({ value: decoy }), DenyDecoyLeakError);
+  await assert.rejects(() => guarded.withConfig({ tags: ['guarded'] }).invoke({ value: decoy }), DenyDecoyLeakError);
+  assert.equal(executions, 0);
 });

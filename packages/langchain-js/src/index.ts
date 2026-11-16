@@ -127,9 +127,11 @@ export function decoyWatchOutputRunnable<TOutput = unknown>(
  * Wrap a structured tool so raw arguments are checked before validation and
  * execution.
  *
- * The proxy delegates through the inner tool's normal entry point, preserving
- * its schema, configuration, callbacks, metadata, and ToolCall behaviour. A
- * blocking hit rejects before the inner tool validates or executes.
+ * Supports direct `invoke`, `call`, `func`, and `_call` execution plus Runnable
+ * helpers that route through `invoke`, including batch, stream, and configured
+ * or bound Runnables. A blocking hit rejects before validation or execution.
+ * Other methods and getters run with the inner tool as their receiver, so
+ * subclasses using private fields remain compatible.
  */
 export function decoyWatchToolInput(
   watch: DecoyWatch,
@@ -137,28 +139,50 @@ export function decoyWatchToolInput(
 ): StructuredToolInterface {
   type ToolWithCall = StructuredToolInterface & {
     call?: (input: unknown, config?: unknown, tags?: string[]) => Promise<unknown>;
+    func?: (input: unknown, ...args: unknown[]) => Promise<unknown>;
+    _call?: (input: unknown, ...args: unknown[]) => Promise<unknown>;
+    [key: PropertyKey]: unknown;
   };
 
   const target = inner as ToolWithCall;
   const inputToScan = (input: unknown): unknown => input;
-
-  return new Proxy(target, {
-    get(proxyTarget, property, receiver) {
-      if (property === 'invoke') {
-        return async (input: unknown, config?: unknown) => {
+  const routedHelpers = new Set([
+    'bind', 'map', 'withConfig', 'withFallbacks', 'withListeners', 'withRetry',
+    'pipe', 'pick', 'assign',
+  ]);
+  let proxy: ToolWithCall;
+  proxy = new Proxy(target, {
+    get(proxyTarget, property) {
+      const value = Reflect.get(proxyTarget, property, proxyTarget);
+      if (['invoke', 'call', 'func', '_call'].includes(String(property)) && typeof value === 'function') {
+        return async (input: unknown, ...args: unknown[]) => {
           await watch.check(inputToScan(input), 'tool_args');
-          return Reflect.apply(proxyTarget.invoke, proxyTarget, [input, config]);
+          return Reflect.apply(value, proxyTarget, [input, ...args]);
         };
       }
-      if (property === 'call' && typeof proxyTarget.call === 'function') {
-        return async (input: unknown, config?: unknown, tags?: string[]) => {
-          await watch.check(inputToScan(input), 'tool_args');
-          return Reflect.apply(proxyTarget.call!, proxyTarget, [input, config, tags]);
+      if (property === 'batch' && typeof value === 'function') {
+        return async (inputs: unknown[], ...args: unknown[]) => {
+          await Promise.all(inputs.map((input) => watch.check(inputToScan(input), 'tool_args')));
+          return Reflect.apply(value, proxyTarget, [inputs, ...args]);
         };
       }
-      return Reflect.get(proxyTarget, property, receiver);
+      if (['stream', 'streamEvents', 'streamLog', '_streamIterator'].includes(String(property))
+        && typeof value === 'function') {
+        return async (input: unknown, ...args: unknown[]) => {
+          await watch.check(inputToScan(input), 'tool_args');
+          return Reflect.apply(value, proxyTarget, [input, ...args]);
+        };
+      }
+      if (routedHelpers.has(String(property)) && typeof value === 'function') {
+        return (...args: unknown[]) => Reflect.apply(value, proxy, args);
+      }
+      return typeof value === 'function' ? value.bind(proxyTarget) : value;
     },
-  }) as StructuredToolInterface;
+    has: (proxyTarget, property) => Reflect.has(proxyTarget, property),
+    ownKeys: (proxyTarget) => Reflect.ownKeys(proxyTarget),
+    getPrototypeOf: (proxyTarget) => Reflect.getPrototypeOf(proxyTarget),
+  });
+  return proxy as StructuredToolInterface;
 }
 
 export {
