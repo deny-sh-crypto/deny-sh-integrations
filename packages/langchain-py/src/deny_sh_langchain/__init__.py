@@ -30,6 +30,7 @@ from .decoy import (
     DenyDecoyLeakError,
     create_decoy_watch,
 )
+from .decoy_adapters import decoy_watch_output_runnable, decoy_watch_tool
 from .tool import deny_vault_tool
 
 __all__ = [
@@ -42,6 +43,8 @@ __all__ = [
     "DecoyWatch",
     "DecoyHit",
     "DenyDecoyLeakError",
+    "decoy_watch_output_runnable",
+    "decoy_watch_tool",
 ]
 
 __version__ = "0.2.0"
