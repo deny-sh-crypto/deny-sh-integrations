@@ -161,6 +161,35 @@ test('block:false returns output and reports the output hit through onLeak', asy
   assert.equal(hits[0]?.surface, 'model_output');
 });
 
+test('output Runnable stream buffers split decoy and emits nothing before rejection', async () => {
+  const decoy = 'decoy-langchain-stream-1234';
+  const model = RunnableLambda.from(async function* () {
+    yield 'contains decoy-langchain-';
+    yield 'stream-1234';
+  });
+  let emitted = '';
+  await assert.rejects(async () => {
+    const stream = await model.pipe(decoyWatchOutputRunnable(
+      createDecoyWatch({ decoys: [decoy], report: false }),
+    )).stream('prompt');
+    for await (const chunk of stream) emitted += chunk;
+  });
+  assert.equal(emitted, '');
+});
+
+test('output Runnable stream emits joined clean text after checking', async () => {
+  const model = RunnableLambda.from(async function* () {
+    yield 'clean ';
+    yield 'stream output';
+  });
+  const stream = await model.pipe(decoyWatchOutputRunnable(
+    createDecoyWatch({ decoys: ['decoy-langchain-stream-clean-1234'], report: false }),
+  )).stream('prompt');
+  const chunks: string[] = [];
+  for await (const chunk of stream as unknown as AsyncIterable<string>) chunks.push(chunk);
+  assert.deepEqual(chunks, ['clean stream output']);
+});
+
 test('tool-input wrapper blocks a decoy before the inner tool executes', async () => {
   const decoy = 'decoy-langchain-tool-1234';
   let executions = 0;

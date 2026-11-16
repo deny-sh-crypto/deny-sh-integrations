@@ -110,9 +110,9 @@ export function denyVaultTool<TArgs = Record<string, unknown>, TResult = unknown
  *
  * Pipe it after a model or output parser. With `invoke`, it checks the final
  * text or structured value supplied by the preceding Runnable. In a streaming
- * chain, it can only check values as LangChain supplies them: already-emitted
- * chunks cannot be retracted, and a decoy split across chunks is not joined.
- * A model stream consumed without this Runnable is not covered.
+ * chain this step holds the output until the stream ends, checks the joined
+ * value, then emits. Nothing is emitted before the check, and memory grows with
+ * the output. A model stream consumed without this Runnable is not covered.
  */
 export function decoyWatchOutputRunnable<TOutput = unknown>(
   watch: DecoyWatch,
