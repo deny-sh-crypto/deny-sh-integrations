@@ -616,6 +616,25 @@ test('stream middleware reports an over-limit suffix decoy only once', async () 
   assert.equal(hits.length, 1);
 });
 
+test('blocking stream middleware reports an over-limit decoy only once', async () => {
+  const decoy = 'decoy123';
+  const hits: DecoyHit[] = [];
+  const model = wrapLanguageModel({
+    model: new MockLanguageModelV2({ doStream: { stream: simulateReadableStream({ chunks: [
+      { type: 'text-delta' as const, id: 'text-1', delta: `xxxx${decoy}` },
+      { type: 'text-delta' as const, id: 'text-1', delta: 'more text after the limit' },
+      { type: 'text-end' as const, id: 'text-1' },
+    ] }) } }),
+    middleware: decoyWatchLanguageModelMiddleware(createDecoyWatch({
+      decoys: [decoy], report: false, onLeak: (hit) => { hits.push(hit); },
+    }), { maxBufferChars: 10, overlapChars: 8 }),
+  });
+  const { stream } = await model.doStream({} as never);
+  const reader = stream.getReader();
+  await assert.rejects(async () => { while (!(await reader.read()).done) { /* consume */ } });
+  assert.equal(hits.length, 1);
+});
+
 test('tool-input wrapper blocks a decoy before execute runs', async () => {
   const decoy = 'decoy-vercel-tool-1234';
   let executions = 0;

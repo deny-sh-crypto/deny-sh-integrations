@@ -151,8 +151,10 @@ export function decoyWatchLanguageModelMiddleware(
         const next = (buffers.get(id) ?? '') + delta;
         buffers.set(id, next);
         if (next.length > maxBufferChars) {
+          // Clear first: if the check throws (blocking hit), the final check must not report it again.
+          buffers.set(id, '');
           const hits = await watch.check(next, 'model_output');
-          buffers.set(id, hits.length > 0 ? '' : next.slice(-overlapChars));
+          if (hits.length === 0) buffers.set(id, next.slice(-overlapChars));
         }
       };
       const checkRemaining = async () => {
