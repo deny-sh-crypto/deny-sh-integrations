@@ -27,9 +27,11 @@
  *   const agent = createAgent({ model, tools: [invoiceTool] });
  */
 
-import { tool } from '@langchain/core/tools';
+import { DynamicStructuredTool, tool } from '@langchain/core/tools';
 import type { StructuredToolInterface } from '@langchain/core/tools';
+import { RunnableLambda } from '@langchain/core/runnables';
 import {
+  type DecoyWatch,
   createVaultResolver,
   type DenyVaultClientOptions,
   type VaultClient,
@@ -103,5 +105,61 @@ export function denyVaultTool<TArgs = Record<string, unknown>, TResult = unknown
   return built as unknown as StructuredToolInterface;
 }
 
-export { createVaultResolver, DenyToolError, DenyLeakError, isNarrowed } from 'deny-sh-integrations-core';
-export type { DenyVaultClientOptions, VaultClient } from 'deny-sh-integrations-core';
+/**
+ * Create a pass-through Runnable that checks model output before returning it.
+ *
+ * Pipe it after a model or output parser. With `invoke`, it checks the final
+ * text or structured value supplied by the preceding Runnable. In a streaming
+ * chain, it can only check values as LangChain supplies them: already-emitted
+ * chunks cannot be retracted, and a decoy split across chunks is not joined.
+ * A model stream consumed without this Runnable is not covered.
+ */
+export function decoyWatchOutputRunnable<TOutput = unknown>(
+  watch: DecoyWatch,
+): RunnableLambda<TOutput, TOutput> {
+  return RunnableLambda.from(async (output: TOutput) => {
+    await watch.check(output, 'model_output');
+    return output;
+  });
+}
+
+/**
+ * Wrap a structured tool so validated arguments are checked before execution.
+ *
+ * The wrapper preserves the inner tool's name, description, schema, and
+ * `returnDirect` value. A blocking hit rejects before `inner.invoke` runs.
+ */
+export function decoyWatchToolInput(
+  watch: DecoyWatch,
+  inner: StructuredToolInterface,
+): StructuredToolInterface {
+  const wrapped = new DynamicStructuredTool({
+    name: inner.name,
+    description: inner.description,
+    schema: inner.schema,
+    returnDirect: inner.returnDirect,
+    func: async (args: unknown, _runManager, config) => {
+      await watch.check(args, 'tool_args');
+      return inner.invoke(args as never, config);
+    },
+  });
+  return wrapped as unknown as StructuredToolInterface;
+}
+
+export {
+  createDecoyWatch,
+  createVaultResolver,
+  DenyDecoyLeakError,
+  DenyToolError,
+  DenyLeakError,
+  isNarrowed,
+} from 'deny-sh-integrations-core';
+export type {
+  DecoyEncoding,
+  DecoyHit,
+  DecoySurface,
+  DecoyWatch,
+  DecoyWatchConfig,
+  DenyVaultClientOptions,
+  VaultClient,
+} from 'deny-sh-integrations-core';
