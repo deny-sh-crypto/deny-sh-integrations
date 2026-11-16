@@ -15,6 +15,7 @@ import warnings
 from dataclasses import dataclass, fields, is_dataclass
 from typing import Any, Callable, Dict, List, Literal, Mapping, Optional, Sequence, Tuple
 from urllib import error as urlerror, request
+from urllib.parse import urlsplit
 
 from .core import DenyToolError
 
@@ -439,12 +440,18 @@ def _run_bounded(call: Callable[[], Any], timeout: float) -> Tuple[bool, Any]:
         return False, TimeoutError("timeout")
 
 
+class _NoRedirectHandler(request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
 def _default_transport(
     url: str, headers: Dict[str, str], body: bytes, timeout: float
 ) -> int:
     req = request.Request(url, data=body, headers=headers, method="POST")
+    opener = request.build_opener(_NoRedirectHandler())
     try:
-        with request.urlopen(req, timeout=timeout) as response:  # noqa: S310
+        with opener.open(req, timeout=timeout) as response:  # noqa: S310
             return int(response.status)
     except urlerror.HTTPError as error:
         return int(error.code)
@@ -646,6 +653,20 @@ def create_decoy_watch(
         if base_url is not None
         else os.environ.get("DENY_API_URL", _DEFAULT_API_BASE_URL)
     )
+    try:
+        parsed_base_url = urlsplit(resolved_base_url)
+        scheme = parsed_base_url.scheme.lower()
+        hostname = parsed_base_url.hostname
+    except Exception:
+        scheme = ""
+        hostname = None
+    if scheme != "https" and not (
+        scheme == "http" and hostname in {"localhost", "127.0.0.1", "::1"}
+    ):
+        raise DenyToolError(
+            "deny_config_error",
+            "`base_url` must use HTTPS, except for localhost loopback URLs.",
+        )
     return DecoyWatch(
         tuple(normalized_by_fingerprint.values()),
         api_key=resolved_api_key,

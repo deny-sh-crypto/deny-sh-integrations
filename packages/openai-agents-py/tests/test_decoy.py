@@ -1,5 +1,7 @@
 import asyncio
+import http.server
 import json
+import threading
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -147,6 +149,69 @@ def test_report_body_and_base_url_contain_no_decoy():
     assert DECOY not in body_bytes.decode()
     assert headers["Authorization"] == "Bearer test-key"
     assert timeout == 3.0
+
+
+def test_non_https_base_url_rejected_except_loopback():
+    with pytest.raises(DenyToolError) as error:
+        create_decoy_watch([DECOY], base_url="http://example.com", report=False)
+    assert error.value.code == "deny_config_error"
+    create_decoy_watch(
+        [DECOY], base_url="http://127.0.0.1:12345", report=False
+    )
+
+
+def test_default_transport_does_not_follow_redirects():
+    requests_seen = {"first": 0, "second": 0}
+    failures = []
+
+    class SecondHandler(http.server.BaseHTTPRequestHandler):
+        def do_POST(self):
+            requests_seen["second"] += 1
+            self.send_response(204)
+            self.end_headers()
+
+        def log_message(self, *_args):
+            pass
+
+    second = http.server.ThreadingHTTPServer(("127.0.0.1", 0), SecondHandler)
+
+    class FirstHandler(http.server.BaseHTTPRequestHandler):
+        def do_POST(self):
+            requests_seen["first"] += 1
+            self.send_response(302)
+            self.send_header(
+                "Location", f"http://127.0.0.1:{second.server_port}/redirected"
+            )
+            self.end_headers()
+
+        def log_message(self, *_args):
+            pass
+
+    first = http.server.ThreadingHTTPServer(("127.0.0.1", 0), FirstHandler)
+    threads = [
+        threading.Thread(target=server.serve_forever, daemon=True)
+        for server in (first, second)
+    ]
+    for thread in threads:
+        thread.start()
+    try:
+        watch = create_decoy_watch(
+            [DECOY],
+            api_key="test-key",
+            base_url=f"http://127.0.0.1:{first.server_port}/api",
+            block=False,
+            on_report_error=failures.append,
+        )
+        hit = watch.check(DECOY)[0]
+    finally:
+        first.shutdown()
+        second.shutdown()
+        first.server_close()
+        second.server_close()
+    assert requests_seen == {"first": 1, "second": 0}
+    assert failures == [
+        {"fingerprint": hit.fingerprint, "surface": "other", "status": 302}
+    ]
 
 
 def test_report_failure_is_swallowed_scrubbed_and_observed():
