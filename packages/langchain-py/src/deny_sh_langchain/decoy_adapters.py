@@ -27,29 +27,20 @@ def decoy_watch_output_runnable(watch: DecoyWatch):
 
 
 def decoy_watch_tool(tool: Any, watch: DecoyWatch):
-    """Return a StructuredTool that checks arguments before delegating."""
-    from langchain_core.tools import StructuredTool
+    """Return a copy that checks raw arguments before normal tool validation."""
 
-    def invoke_wrapped(**kwargs: Any) -> Any:
-        watch.check(kwargs, "tool_args")
-        return tool.invoke(kwargs)
+    class WatchedTool(type(tool)):
+        def run(self, tool_input: Any, *args: Any, **kwargs: Any) -> Any:
+            watch.check(tool_input, "tool_args")
+            return super().run(tool_input, *args, **kwargs)
 
-    async def ainvoke_wrapped(**kwargs: Any) -> Any:
-        await watch.acheck(kwargs, "tool_args")
-        return await tool.ainvoke(kwargs)
+        async def arun(self, tool_input: Any, *args: Any, **kwargs: Any) -> Any:
+            await watch.acheck(tool_input, "tool_args")
+            return await super().arun(tool_input, *args, **kwargs)
 
-    return StructuredTool.from_function(
-        func=invoke_wrapped,
-        coroutine=ainvoke_wrapped,
-        name=tool.name,
-        description=tool.description,
-        return_direct=tool.return_direct,
-        args_schema=tool.args_schema,
-        infer_schema=False,
-        response_format=tool.response_format,
-        tags=tool.tags,
-        metadata=tool.metadata,
-    )
+    wrapped = tool.model_copy()
+    wrapped.__class__ = WatchedTool
+    return wrapped
 
 
 __all__ = ["decoy_watch_output_runnable", "decoy_watch_tool"]
