@@ -110,11 +110,11 @@ export function denyVaultTool<TArgs = Record<string, unknown>, TResult = unknown
  * Streaming output is checked when the stream ends. Text already delivered to
  * the caller before the stream ends cannot be retracted, so streaming provides
  * end-of-stream detection and reporting, not prevention. Text and tool-input
- * buffers are isolated by id. Each buffer is checked after 256 KiB and reduced
- * to a 16 KiB overlap; a decoy longer than that overlap split across the
- * boundary is not joined. Final checks run on normal close, source error, and
- * consumer cancellation. A decoy split across separate model calls is not
- * joined.
+ * buffers are isolated by id. Buffer checks default to 256 KiB with a 16 KiB
+ * overlap; both finite integer limits can be overridden with `maxBufferChars`
+ * and `overlapChars`. A decoy longer than the overlap split across a boundary
+ * is not joined. Final checks run on normal close, source error, and consumer
+ * cancellation. A decoy split across separate model calls is not joined.
  */
 export function decoyWatchLanguageModelMiddleware(
   watch: DecoyWatch,
@@ -122,8 +122,11 @@ export function decoyWatchLanguageModelMiddleware(
 ): LanguageModelMiddleware {
   const maxBufferChars = options.maxBufferChars ?? 256 * 1024;
   const overlapChars = options.overlapChars ?? 16 * 1024;
-  if (maxBufferChars <= 0 || overlapChars < 0 || overlapChars > maxBufferChars) {
-    throw new RangeError('Stream buffer limits require 0 <= overlapChars <= maxBufferChars.');
+  if (!Number.isInteger(maxBufferChars) || !Number.isInteger(overlapChars)
+    || maxBufferChars <= 0 || overlapChars < 0 || overlapChars > maxBufferChars) {
+    throw new RangeError(
+      'Stream buffer limits require finite integers with 0 <= overlapChars <= maxBufferChars.',
+    );
   }
 
   return {
@@ -148,8 +151,8 @@ export function decoyWatchLanguageModelMiddleware(
         const next = (buffers.get(id) ?? '') + delta;
         buffers.set(id, next);
         if (next.length > maxBufferChars) {
-          await watch.check(next, 'model_output');
-          buffers.set(id, next.slice(-overlapChars));
+          const hits = await watch.check(next, 'model_output');
+          buffers.set(id, hits.length > 0 ? '' : next.slice(-overlapChars));
         }
       };
       const checkRemaining = async () => {

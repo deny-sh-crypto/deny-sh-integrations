@@ -582,6 +582,40 @@ test('stream middleware checks a buffer as soon as configured limit is exceeded'
   await reader.cancel('test complete');
 });
 
+test('stream middleware rejects non-finite and fractional buffer limits', () => {
+  const watch = createDecoyWatch({ decoys: ['decoy-vercel-limits-1234'], report: false });
+  for (const maxBufferChars of [Number.NaN, Number.POSITIVE_INFINITY, 1.5]) {
+    assert.throws(
+      () => decoyWatchLanguageModelMiddleware(watch, { maxBufferChars }),
+      RangeError,
+    );
+  }
+  for (const overlapChars of [Number.NaN, Number.POSITIVE_INFINITY, 1.5]) {
+    assert.throws(
+      () => decoyWatchLanguageModelMiddleware(watch, { overlapChars }),
+      RangeError,
+    );
+  }
+});
+
+test('stream middleware reports an over-limit suffix decoy only once', async () => {
+  const decoy = 'decoy123';
+  const hits: DecoyHit[] = [];
+  const model = wrapLanguageModel({
+    model: new MockLanguageModelV2({ doStream: { stream: simulateReadableStream({ chunks: [
+      { type: 'text-delta' as const, id: 'text-1', delta: `xxxx${decoy}` },
+      { type: 'text-end' as const, id: 'text-1' },
+    ] }) } }),
+    middleware: decoyWatchLanguageModelMiddleware(createDecoyWatch({
+      decoys: [decoy], report: false, block: false, onLeak: (hit) => { hits.push(hit); },
+    }), { maxBufferChars: 10, overlapChars: 8 }),
+  });
+  const { stream } = await model.doStream({} as never);
+  const reader = stream.getReader();
+  while (!(await reader.read()).done) { /* consume */ }
+  assert.equal(hits.length, 1);
+});
+
 test('tool-input wrapper blocks a decoy before execute runs', async () => {
   const decoy = 'decoy-vercel-tool-1234';
   let executions = 0;
