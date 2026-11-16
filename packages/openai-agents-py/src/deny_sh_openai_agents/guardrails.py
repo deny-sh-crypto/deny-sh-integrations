@@ -1,4 +1,7 @@
-"""OpenAI Agents SDK adapters for the framework-neutral decoy watch."""
+"""OpenAI Agents SDK adapters for the framework-neutral decoy watch.
+
+Tool-input guardrails require openai-agents 0.3.3 or newer.
+"""
 
 from __future__ import annotations
 

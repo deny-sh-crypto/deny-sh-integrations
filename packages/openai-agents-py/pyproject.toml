@@ -22,8 +22,8 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-agents = ["openai-agents>=0.1,<1"]
-dev = ["openai-agents>=0.1,<1", "pydantic>=2", "pytest>=8"]
+agents = ["openai-agents>=0.3.3,<1"]
+dev = ["openai-agents>=0.3.3,<1", "pydantic>=2", "pytest>=8"]
 
 [project.urls]
 Homepage = "https://deny.sh/integrations/openai-agents"
