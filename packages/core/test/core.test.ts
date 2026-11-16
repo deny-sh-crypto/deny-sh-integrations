@@ -361,7 +361,7 @@ test('decoy report carries only fingerprint, surface, and source', async () => {
   });
   const hits = await watch.check(`out: ${DECOY}`, 'model_output');
   assert.equal(hits.length, 1);
-  assert.equal(calls[0]?.url, 'https://example.invalid/api/v1/decoy-tripwires/observe');
+  assert.equal(calls[0]?.url, 'https://example.invalid/v1/decoy-tripwires/observe');
   const bodyText = String(calls[0]?.init?.body);
   const body = JSON.parse(bodyText) as Record<string, unknown>;
   assert.deepEqual(body, {
@@ -373,24 +373,78 @@ test('decoy report carries only fingerprint, surface, and source', async () => {
   assert.equal((calls[0]?.init?.headers as Record<string, string>).Authorization, 'Bearer test-key');
 });
 
-test('decoy report network failure is swallowed', async () => {
+test('tripwire routing strips only a terminal /api path segment', async () => {
+  const previousApiUrl = process.env.DENY_API_URL;
+  delete process.env.DENY_API_URL;
+  try {
+    const cases: Array<{ baseUrl?: string; expected: string }> = [
+      { expected: 'https://deny.sh/v1/decoy-tripwires/observe' },
+      {
+        baseUrl: 'https://example.invalid/api/',
+        expected: 'https://example.invalid/v1/decoy-tripwires/observe',
+      },
+      {
+        baseUrl: 'http://127.0.0.1:3000',
+        expected: 'http://127.0.0.1:3000/v1/decoy-tripwires/observe',
+      },
+      {
+        baseUrl: 'https://example.invalid/apiary',
+        expected: 'https://example.invalid/apiary/v1/decoy-tripwires/observe',
+      },
+    ];
+    for (const item of cases) {
+      const urls: string[] = [];
+      const watch = createDecoyWatch({
+        decoys: [DECOY],
+        clientOptions: {
+          apiKey: 'test-key',
+          ...(item.baseUrl === undefined ? {} : { baseUrl: item.baseUrl }),
+        },
+        fetch: async (input) => {
+          urls.push(String(input));
+          return new Response('{}', { status: 200 });
+        },
+        block: false,
+      });
+      await watch.check(DECOY, 'model_output');
+      assert.equal(urls[0], item.expected);
+    }
+  } finally {
+    if (previousApiUrl === undefined) delete process.env.DENY_API_URL;
+    else process.env.DENY_API_URL = previousApiUrl;
+  }
+});
+
+test('decoy report network failure is swallowed and observed safely', async () => {
+  const failures: Array<{ fingerprint: string; surface: string; error?: string }> = [];
   const watch = createDecoyWatch({
     decoys: [DECOY],
     clientOptions: { apiKey: 'test-key' },
     fetch: async () => {
-      throw new Error('offline');
+      throw new Error(`offline for ${DECOY}`);
     },
+    onReportError: (info) => failures.push(info),
     block: false,
   });
   const hits = await watch.check(DECOY, 'model_output');
   assert.equal(hits.length, 1);
+  assert.deepEqual(failures, [
+    {
+      fingerprint: hits[0]?.fingerprint,
+      surface: 'model_output',
+      error: 'offline for [deny:redacted]',
+    },
+  ]);
+  assert.ok(!JSON.stringify(failures).includes(DECOY));
 });
 
 test('decoy report is bounded when injected fetch ignores abort', async () => {
+  const failures: Array<{ error?: string }> = [];
   const watch = createDecoyWatch({
     decoys: [DECOY],
     clientOptions: { apiKey: 'test-key' },
     fetch: async () => new Promise<Response>(() => {}),
+    onReportError: (info) => failures.push(info),
     reportTimeoutMs: 10,
     block: false,
   });
@@ -399,6 +453,36 @@ test('decoy report is bounded when injected fetch ignores abort', async () => {
     new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 250)),
   ]);
   assert.equal(completed, true);
+  assert.equal(failures[0]?.error, 'timeout');
+});
+
+test('decoy report non-2xx status is swallowed and observed', async () => {
+  const failures: Array<{ fingerprint: string; surface: string; status?: number }> = [];
+  const watch = createDecoyWatch({
+    decoys: [DECOY],
+    clientOptions: { apiKey: 'test-key' },
+    fetch: async () => new Response('{}', { status: 503 }),
+    onReportError: (info) => failures.push(info),
+    block: false,
+  });
+  const hits = await watch.check(DECOY, 'tool_args');
+  assert.deepEqual(failures, [
+    { fingerprint: hits[0]?.fingerprint, surface: 'tool_args', status: 503 },
+  ]);
+});
+
+test('onReportError exceptions never propagate', async () => {
+  const watch = createDecoyWatch({
+    decoys: [DECOY],
+    clientOptions: { apiKey: 'test-key' },
+    fetch: async () => new Response('{}', { status: 500 }),
+    onReportError: () => {
+      throw new Error('observer failed');
+    },
+    block: false,
+  });
+  const hits = await watch.check(DECOY, 'model_output');
+  assert.equal(hits.length, 1);
 });
 
 test('block true throws scrubbed DenyDecoyLeakError after callback', async () => {
@@ -435,7 +519,9 @@ test('block false returns hits and onLeak runs once per hit', async () => {
 
 test('arm posts each fingerprint as plaintext tripwire', async () => {
   const bodies: Array<Record<string, unknown>> = [];
-  const fakeFetch: typeof fetch = async (_input, init) => {
+  const urls: string[] = [];
+  const fakeFetch: typeof fetch = async (input, init) => {
+    urls.push(String(input));
     bodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
     return new Response(JSON.stringify({ ok: true }), { status: 200 });
   };
@@ -446,6 +532,10 @@ test('arm posts each fingerprint as plaintext tripwire', async () => {
     report: false,
   });
   assert.deepEqual(await watch.arm(), { armed: 2 });
+  assert.deepEqual(urls, [
+    'https://example.invalid/v1/decoy-tripwires',
+    'https://example.invalid/v1/decoy-tripwires',
+  ]);
   assert.deepEqual(
     bodies.map((body) => body.tripwire_kind),
     ['plaintext', 'plaintext'],

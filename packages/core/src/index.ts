@@ -241,6 +241,12 @@ export interface DecoyWatchConfig {
   report?: boolean;
   block?: boolean;
   onLeak?: (hit: DecoyHit) => void | Promise<void>;
+  onReportError?: (info: {
+    fingerprint: string;
+    surface: DecoySurface;
+    status?: number;
+    error?: string;
+  }) => void;
   fetch?: typeof fetch;
   reportTimeoutMs?: number;
 }
@@ -359,9 +365,11 @@ export function createDecoyWatch(config: DecoyWatchConfig): DecoyWatch {
   const clientOptions = config.clientOptions ?? {};
   const apiKey = clientOptions.apiKey ?? process.env.DENY_API_KEY;
   const baseUrl = (clientOptions.baseUrl ?? process.env.DENY_API_URL ?? DEFAULT_API_BASE_URL).replace(
-    /\/$/,
+    /\/+$/,
     '',
   );
+  // Tripwire routes are served at the origin; vault routes remain under /api.
+  const v1Base = baseUrl.replace(/\/api$/, '');
   const shouldReport = config.report ?? Boolean(apiKey);
   const shouldBlock = config.block !== false;
   const fetchImpl = config.fetch ?? globalThis.fetch;
@@ -401,7 +409,7 @@ export function createDecoyWatch(config: DecoyWatchConfig): DecoyWatch {
     if (externalSignal?.aborted) abortFromExternal();
     else externalSignal?.addEventListener('abort', abortFromExternal, { once: true });
     try {
-      return await fetchImpl(`${baseUrl}${path}`, {
+      return await fetchImpl(`${v1Base}${path}`, {
         method: 'POST',
         headers: {
           Authorization: `Bearer ${apiKey}`,
@@ -417,10 +425,32 @@ export function createDecoyWatch(config: DecoyWatchConfig): DecoyWatch {
     }
   };
 
+  const notifyReportError = async (
+    info: Parameters<NonNullable<DecoyWatchConfig['onReportError']>>[0],
+  ): Promise<void> => {
+    try {
+      await config.onReportError?.(info);
+    } catch {
+      // Error-observer failures must never disrupt the agent path.
+    }
+  };
+
+  const reportErrorText = (error: unknown): string => {
+    let text = 'network_error';
+    try {
+      if (error instanceof Error && error.message) text = error.message;
+      else if (typeof error === 'string' && error) text = error;
+    } catch {
+      // Retain the stable fallback.
+    }
+    for (const decoy of decoys) text = text.split(decoy.value).join('[deny:redacted]');
+    return text;
+  };
+
   const reportHit = async (hit: DecoyHit): Promise<void> => {
     if (!shouldReport) return;
     try {
-      await settleWithin(
+      const response = await settleWithin(
         post('/v1/decoy-tripwires/observe', {
           tripwire_hash: hit.fingerprint,
           surface: hit.surface,
@@ -428,8 +458,25 @@ export function createDecoyWatch(config: DecoyWatchConfig): DecoyWatch {
         }),
         reportTimeoutMs,
       );
-    } catch {
-      // Reporting must never disrupt the agent path.
+      if (!response) {
+        await notifyReportError({
+          fingerprint: hit.fingerprint,
+          surface: hit.surface,
+          error: 'timeout',
+        });
+      } else if (!response.ok) {
+        await notifyReportError({
+          fingerprint: hit.fingerprint,
+          surface: hit.surface,
+          status: response.status,
+        });
+      }
+    } catch (error) {
+      await notifyReportError({
+        fingerprint: hit.fingerprint,
+        surface: hit.surface,
+        error: reportErrorText(error),
+      });
     }
   };
 
