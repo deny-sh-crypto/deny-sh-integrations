@@ -1,0 +1,820 @@
+{
+ "note": "Generated from deny-sh-integrations-core@0.2.0 (npm). expected = scan(value, surface) result, order preserved.",
+ "decoys": [
+  {
+   "label": "ascii-key",
+   "value": "sk-decoy-VECTOR-0123456789abcdef"
+  },
+  {
+   "label": "with-space",
+   "value": "decoy pass phrase 42 blue"
+  },
+  {
+   "label": "symbols",
+   "value": "p@ss/w+rd=decoy&x?y#z%1"
+  },
+  {
+   "label": "unicode",
+   "value": "décoy-ключ-鍵-12345"
+  }
+ ],
+ "fingerprints": [
+  "2606980ec1fef6bc344468f383ac03356d703655c08adf488db79353ca551af2",
+  "1a5329e262222aa233393f45aa1b455c71c08620ef15ac88eba8b933447d3391",
+  "0a4841b20fc3df6ef5f75518277b51c6bb11279be0e0bde44e333df77d83d793",
+  "fdfb9f5679a329c2f294ffc6ce795d89ccb7b64d565aaf8293605cc6f4fba718"
+ ],
+ "cases": [
+  {
+   "name": "clean text",
+   "value": "The invoice total is 42 pounds.",
+   "surface": "model_output",
+   "expected": []
+  },
+  {
+   "name": "clean object",
+   "value": {
+    "a": [
+     1,
+     2,
+     {
+      "b": "nothing here"
+     }
+    ],
+    "c": null
+   },
+   "surface": "model_output",
+   "expected": []
+  },
+  {
+   "name": "ascii-key plain",
+   "value": "prefix sk-decoy-VECTOR-0123456789abcdef suffix",
+   "surface": "model_output",
+   "expected": [
+    {
+     "label": "ascii-key",
+     "fingerprint": "2606980ec1fef6bc344468f383ac03356d703655c08adf488db79353ca551af2",
+     "surface": "model_output",
+     "encoding": "plain"
+    }
+   ]
+  },
+  {
+   "name": "ascii-key plain nested",
+   "value": {
+    "args": {
+     "list": [
+      "x",
+      {
+       "deep": "sk-decoy-VECTOR-0123456789abcdef"
+      }
+     ]
+    }
+   },
+   "surface": "tool_args",
+   "expected": [
+    {
+     "label": "ascii-key",
+     "fingerprint": "2606980ec1fef6bc344468f383ac03356d703655c08adf488db79353ca551af2",
+     "surface": "tool_args",
+     "encoding": "plain"
+    }
+   ]
+  },
+  {
+   "name": "ascii-key base64 padded",
+   "value": "x c2stZGVjb3ktVkVDVE9SLTAxMjM0NTY3ODlhYmNkZWY= y",
+   "surface": "model_output",
+   "expected": [
+    {
+     "label": "ascii-key",
+     "fingerprint": "2606980ec1fef6bc344468f383ac03356d703655c08adf488db79353ca551af2",
+     "surface": "model_output",
+     "encoding": "base64"
+    }
+   ]
+  },
+  {
+   "name": "ascii-key base64 unpadded",
+   "value": "c2stZGVjb3ktVkVDVE9SLTAxMjM0NTY3ODlhYmNkZWY",
+   "surface": "model_output",
+   "expected": [
+    {
+     "label": "ascii-key",
+     "fingerprint": "2606980ec1fef6bc344468f383ac03356d703655c08adf488db79353ca551af2",
+     "surface": "model_output",
+     "encoding": "base64"
+    }
+   ]
+  },
+  {
+   "name": "ascii-key base64url",
+   "value": "c2stZGVjb3ktVkVDVE9SLTAxMjM0NTY3ODlhYmNkZWY",
+   "surface": "tool_args",
+   "expected": [
+    {
+     "label": "ascii-key",
+     "fingerprint": "2606980ec1fef6bc344468f383ac03356d703655c08adf488db79353ca551af2",
+     "surface": "tool_args",
+     "encoding": "base64"
+    }
+   ]
+  },
+  {
+   "name": "ascii-key hex lower",
+   "value": "736b2d6465636f792d564543544f522d30313233343536373839616263646566",
+   "surface": "model_output",
+   "expected": [
+    {
+     "label": "ascii-key",
+     "fingerprint": "2606980ec1fef6bc344468f383ac03356d703655c08adf488db79353ca551af2",
+     "surface": "model_output",
+     "encoding": "hex"
+    }
+   ]
+  },
+  {
+   "name": "ascii-key hex upper",
+   "value": "k=736B2D6465636F792D564543544F522D30313233343536373839616263646566",
+   "surface": "model_output",
+   "expected": [
+    {
+     "label": "ascii-key",
+     "fingerprint": "2606980ec1fef6bc344468f383ac03356d703655c08adf488db79353ca551af2",
+     "surface": "model_output",
+     "encoding": "hex"
+    }
+   ]
+  },
+  {
+   "name": "ascii-key percent uri",
+   "value": "sk-decoy-VECTOR-0123456789abcdef",
+   "surface": "other",
+   "expected": [
+    {
+     "label": "ascii-key",
+     "fingerprint": "2606980ec1fef6bc344468f383ac03356d703655c08adf488db79353ca551af2",
+     "surface": "other",
+     "encoding": "plain"
+    }
+   ]
+  },
+  {
+   "name": "ascii-key percent all upper",
+   "value": "%73%6B%2D%64%65%63%6F%79%2D%56%45%43%54%4F%52%2D%30%31%32%33%34%35%36%37%38%39%61%62%63%64%65%66",
+   "surface": "model_output",
+   "expected": [
+    {
+     "label": "ascii-key",
+     "fingerprint": "2606980ec1fef6bc344468f383ac03356d703655c08adf488db79353ca551af2",
+     "surface": "model_output",
+     "encoding": "percent"
+    }
+   ]
+  },
+  {
+   "name": "ascii-key percent all lower",
+   "value": "%73%6b%2d%64%65%63%6f%79%2d%56%45%43%54%4f%52%2d%30%31%32%33%34%35%36%37%38%39%61%62%63%64%65%66",
+   "surface": "model_output",
+   "expected": [
+    {
+     "label": "ascii-key",
+     "fingerprint": "2606980ec1fef6bc344468f383ac03356d703655c08adf488db79353ca551af2",
+     "surface": "model_output",
+     "encoding": "percent"
+    }
+   ]
+  },
+  {
+   "name": "ascii-key percent plus-for-space",
+   "value": "sk-decoy-VECTOR-0123456789abcdef",
+   "surface": "model_output",
+   "expected": [
+    {
+     "label": "ascii-key",
+     "fingerprint": "2606980ec1fef6bc344468f383ac03356d703655c08adf488db79353ca551af2",
+     "surface": "model_output",
+     "encoding": "plain"
+    }
+   ]
+  },
+  {
+   "name": "ascii-key spaced",
+   "value": "s k - d e c o y - V E C T O R - 0 1 2 3 4 5 6 7 8 9 a b c d e f",
+   "surface": "model_output",
+   "expected": [
+    {
+     "label": "ascii-key",
+     "fingerprint": "2606980ec1fef6bc344468f383ac03356d703655c08adf488db79353ca551af2",
+     "surface": "model_output",
+     "encoding": "spaced"
+    }
+   ]
+  },
+  {
+   "name": "ascii-key newline in middle",
+   "value": "sk-deco\ny-VECTOR-0123456789abcdef",
+   "surface": "model_output",
+   "expected": [
+    {
+     "label": "ascii-key",
+     "fingerprint": "2606980ec1fef6bc344468f383ac03356d703655c08adf488db79353ca551af2",
+     "surface": "model_output",
+     "encoding": "spaced"
+    }
+   ]
+  },
+  {
+   "name": "ascii-key truncated (no hit expected)",
+   "value": "sk-decoy-VECTOR-0123456789abcd",
+   "surface": "model_output",
+   "expected": []
+  },
+  {
+   "name": "ascii-key reversed (no hit expected)",
+   "value": "fedcba9876543210-ROTCEV-yoced-ks",
+   "surface": "model_output",
+   "expected": []
+  },
+  {
+   "name": "ascii-key double base64 (nested encoding)",
+   "value": "YzJzdFpHVmpiM2t0VmtWRFZFOVNMVEF4TWpNME5UWTNPRGxoWW1Oa1pXWT0=",
+   "surface": "model_output",
+   "expected": []
+  },
+  {
+   "name": "with-space plain",
+   "value": "prefix decoy pass phrase 42 blue suffix",
+   "surface": "model_output",
+   "expected": [
+    {
+     "label": "with-space",
+     "fingerprint": "1a5329e262222aa233393f45aa1b455c71c08620ef15ac88eba8b933447d3391",
+     "surface": "model_output",
+     "encoding": "plain"
+    }
+   ]
+  },
+  {
+   "name": "with-space plain nested",
+   "value": {
+    "args": {
+     "list": [
+      "x",
+      {
+       "deep": "decoy pass phrase 42 blue"
+      }
+     ]
+    }
+   },
+   "surface": "tool_args",
+   "expected": [
+    {
+     "label": "with-space",
+     "fingerprint": "1a5329e262222aa233393f45aa1b455c71c08620ef15ac88eba8b933447d3391",
+     "surface": "tool_args",
+     "encoding": "plain"
+    }
+   ]
+  },
+  {
+   "name": "with-space base64 padded",
+   "value": "x ZGVjb3kgcGFzcyBwaHJhc2UgNDIgYmx1ZQ== y",
+   "surface": "model_output",
+   "expected": [
+    {
+     "label": "with-space",
+     "fingerprint": "1a5329e262222aa233393f45aa1b455c71c08620ef15ac88eba8b933447d3391",
+     "surface": "model_output",
+     "encoding": "base64"
+    }
+   ]
+  },
+  {
+   "name": "with-space base64 unpadded",
+   "value": "ZGVjb3kgcGFzcyBwaHJhc2UgNDIgYmx1ZQ",
+   "surface": "model_output",
+   "expected": [
+    {
+     "label": "with-space",
+     "fingerprint": "1a5329e262222aa233393f45aa1b455c71c08620ef15ac88eba8b933447d3391",
+     "surface": "model_output",
+     "encoding": "base64"
+    }
+   ]
+  },
+  {
+   "name": "with-space base64url",
+   "value": "ZGVjb3kgcGFzcyBwaHJhc2UgNDIgYmx1ZQ",
+   "surface": "tool_args",
+   "expected": [
+    {
+     "label": "with-space",
+     "fingerprint": "1a5329e262222aa233393f45aa1b455c71c08620ef15ac88eba8b933447d3391",
+     "surface": "tool_args",
+     "encoding": "base64"
+    }
+   ]
+  },
+  {
+   "name": "with-space hex lower",
+   "value": "6465636f7920706173732070687261736520343220626c7565",
+   "surface": "model_output",
+   "expected": [
+    {
+     "label": "with-space",
+     "fingerprint": "1a5329e262222aa233393f45aa1b455c71c08620ef15ac88eba8b933447d3391",
+     "surface": "model_output",
+     "encoding": "hex"
+    }
+   ]
+  },
+  {
+   "name": "with-space hex upper",
+   "value": "k=6465636F7920706173732070687261736520343220626C7565",
+   "surface": "model_output",
+   "expected": [
+    {
+     "label": "with-space",
+     "fingerprint": "1a5329e262222aa233393f45aa1b455c71c08620ef15ac88eba8b933447d3391",
+     "surface": "model_output",
+     "encoding": "hex"
+    }
+   ]
+  },
+  {
+   "name": "with-space percent uri",
+   "value": "decoy%20pass%20phrase%2042%20blue",
+   "surface": "other",
+   "expected": [
+    {
+     "label": "with-space",
+     "fingerprint": "1a5329e262222aa233393f45aa1b455c71c08620ef15ac88eba8b933447d3391",
+     "surface": "other",
+     "encoding": "percent"
+    }
+   ]
+  },
+  {
+   "name": "with-space percent all upper",
+   "value": "%64%65%63%6F%79%20%70%61%73%73%20%70%68%72%61%73%65%20%34%32%20%62%6C%75%65",
+   "surface": "model_output",
+   "expected": [
+    {
+     "label": "with-space",
+     "fingerprint": "1a5329e262222aa233393f45aa1b455c71c08620ef15ac88eba8b933447d3391",
+     "surface": "model_output",
+     "encoding": "percent"
+    }
+   ]
+  },
+  {
+   "name": "with-space percent all lower",
+   "value": "%64%65%63%6f%79%20%70%61%73%73%20%70%68%72%61%73%65%20%34%32%20%62%6c%75%65",
+   "surface": "model_output",
+   "expected": [
+    {
+     "label": "with-space",
+     "fingerprint": "1a5329e262222aa233393f45aa1b455c71c08620ef15ac88eba8b933447d3391",
+     "surface": "model_output",
+     "encoding": "percent"
+    }
+   ]
+  },
+  {
+   "name": "with-space percent plus-for-space",
+   "value": "decoy+pass+phrase+42+blue",
+   "surface": "model_output",
+   "expected": [
+    {
+     "label": "with-space",
+     "fingerprint": "1a5329e262222aa233393f45aa1b455c71c08620ef15ac88eba8b933447d3391",
+     "surface": "model_output",
+     "encoding": "percent"
+    }
+   ]
+  },
+  {
+   "name": "with-space spaced",
+   "value": "d e c o y   p a s s   p h r a s e   4 2   b l u e",
+   "surface": "model_output",
+   "expected": []
+  },
+  {
+   "name": "with-space newline in middle",
+   "value": "decoy p\nass phrase 42 blue",
+   "surface": "model_output",
+   "expected": []
+  },
+  {
+   "name": "with-space truncated (no hit expected)",
+   "value": "decoy pass phrase 42 bl",
+   "surface": "model_output",
+   "expected": []
+  },
+  {
+   "name": "with-space reversed (no hit expected)",
+   "value": "eulb 24 esarhp ssap yoced",
+   "surface": "model_output",
+   "expected": []
+  },
+  {
+   "name": "with-space double base64 (nested encoding)",
+   "value": "WkdWamIza2djR0Z6Y3lCd2FISmhjMlVnTkRJZ1lteDFaUT09",
+   "surface": "model_output",
+   "expected": []
+  },
+  {
+   "name": "symbols plain",
+   "value": "prefix p@ss/w+rd=decoy&x?y#z%1 suffix",
+   "surface": "model_output",
+   "expected": [
+    {
+     "label": "symbols",
+     "fingerprint": "0a4841b20fc3df6ef5f75518277b51c6bb11279be0e0bde44e333df77d83d793",
+     "surface": "model_output",
+     "encoding": "plain"
+    }
+   ]
+  },
+  {
+   "name": "symbols plain nested",
+   "value": {
+    "args": {
+     "list": [
+      "x",
+      {
+       "deep": "p@ss/w+rd=decoy&x?y#z%1"
+      }
+     ]
+    }
+   },
+   "surface": "tool_args",
+   "expected": [
+    {
+     "label": "symbols",
+     "fingerprint": "0a4841b20fc3df6ef5f75518277b51c6bb11279be0e0bde44e333df77d83d793",
+     "surface": "tool_args",
+     "encoding": "plain"
+    }
+   ]
+  },
+  {
+   "name": "symbols base64 padded",
+   "value": "x cEBzcy93K3JkPWRlY295Jng/eSN6JTE= y",
+   "surface": "model_output",
+   "expected": [
+    {
+     "label": "symbols",
+     "fingerprint": "0a4841b20fc3df6ef5f75518277b51c6bb11279be0e0bde44e333df77d83d793",
+     "surface": "model_output",
+     "encoding": "base64"
+    }
+   ]
+  },
+  {
+   "name": "symbols base64 unpadded",
+   "value": "cEBzcy93K3JkPWRlY295Jng/eSN6JTE",
+   "surface": "model_output",
+   "expected": [
+    {
+     "label": "symbols",
+     "fingerprint": "0a4841b20fc3df6ef5f75518277b51c6bb11279be0e0bde44e333df77d83d793",
+     "surface": "model_output",
+     "encoding": "base64"
+    }
+   ]
+  },
+  {
+   "name": "symbols base64url",
+   "value": "cEBzcy93K3JkPWRlY295Jng_eSN6JTE",
+   "surface": "tool_args",
+   "expected": [
+    {
+     "label": "symbols",
+     "fingerprint": "0a4841b20fc3df6ef5f75518277b51c6bb11279be0e0bde44e333df77d83d793",
+     "surface": "tool_args",
+     "encoding": "base64url"
+    }
+   ]
+  },
+  {
+   "name": "symbols hex lower",
+   "value": "704073732f772b72643d6465636f7926783f79237a2531",
+   "surface": "model_output",
+   "expected": [
+    {
+     "label": "symbols",
+     "fingerprint": "0a4841b20fc3df6ef5f75518277b51c6bb11279be0e0bde44e333df77d83d793",
+     "surface": "model_output",
+     "encoding": "hex"
+    }
+   ]
+  },
+  {
+   "name": "symbols hex upper",
+   "value": "k=704073732F772B72643D6465636F7926783F79237A2531",
+   "surface": "model_output",
+   "expected": [
+    {
+     "label": "symbols",
+     "fingerprint": "0a4841b20fc3df6ef5f75518277b51c6bb11279be0e0bde44e333df77d83d793",
+     "surface": "model_output",
+     "encoding": "hex"
+    }
+   ]
+  },
+  {
+   "name": "symbols percent uri",
+   "value": "p%40ss%2Fw%2Brd%3Ddecoy%26x%3Fy%23z%251",
+   "surface": "other",
+   "expected": [
+    {
+     "label": "symbols",
+     "fingerprint": "0a4841b20fc3df6ef5f75518277b51c6bb11279be0e0bde44e333df77d83d793",
+     "surface": "other",
+     "encoding": "percent"
+    }
+   ]
+  },
+  {
+   "name": "symbols percent all upper",
+   "value": "%70%40%73%73%2F%77%2B%72%64%3D%64%65%63%6F%79%26%78%3F%79%23%7A%25%31",
+   "surface": "model_output",
+   "expected": [
+    {
+     "label": "symbols",
+     "fingerprint": "0a4841b20fc3df6ef5f75518277b51c6bb11279be0e0bde44e333df77d83d793",
+     "surface": "model_output",
+     "encoding": "percent"
+    }
+   ]
+  },
+  {
+   "name": "symbols percent all lower",
+   "value": "%70%40%73%73%2f%77%2b%72%64%3d%64%65%63%6f%79%26%78%3f%79%23%7a%25%31",
+   "surface": "model_output",
+   "expected": [
+    {
+     "label": "symbols",
+     "fingerprint": "0a4841b20fc3df6ef5f75518277b51c6bb11279be0e0bde44e333df77d83d793",
+     "surface": "model_output",
+     "encoding": "percent"
+    }
+   ]
+  },
+  {
+   "name": "symbols percent plus-for-space",
+   "value": "p%40ss%2Fw%2Brd%3Ddecoy%26x%3Fy%23z%251",
+   "surface": "model_output",
+   "expected": [
+    {
+     "label": "symbols",
+     "fingerprint": "0a4841b20fc3df6ef5f75518277b51c6bb11279be0e0bde44e333df77d83d793",
+     "surface": "model_output",
+     "encoding": "percent"
+    }
+   ]
+  },
+  {
+   "name": "symbols spaced",
+   "value": "p @ s s / w + r d = d e c o y & x ? y # z % 1",
+   "surface": "model_output",
+   "expected": [
+    {
+     "label": "symbols",
+     "fingerprint": "0a4841b20fc3df6ef5f75518277b51c6bb11279be0e0bde44e333df77d83d793",
+     "surface": "model_output",
+     "encoding": "spaced"
+    }
+   ]
+  },
+  {
+   "name": "symbols newline in middle",
+   "value": "p@ss/w+\nrd=decoy&x?y#z%1",
+   "surface": "model_output",
+   "expected": [
+    {
+     "label": "symbols",
+     "fingerprint": "0a4841b20fc3df6ef5f75518277b51c6bb11279be0e0bde44e333df77d83d793",
+     "surface": "model_output",
+     "encoding": "spaced"
+    }
+   ]
+  },
+  {
+   "name": "symbols truncated (no hit expected)",
+   "value": "p@ss/w+rd=decoy&x?y#z",
+   "surface": "model_output",
+   "expected": []
+  },
+  {
+   "name": "symbols reversed (no hit expected)",
+   "value": "1%z#y?x&yoced=dr+w/ss@p",
+   "surface": "model_output",
+   "expected": []
+  },
+  {
+   "name": "symbols double base64 (nested encoding)",
+   "value": "Y0VCemN5OTNLM0prUFdSbFkyOTVKbmcvZVNONkpURT0=",
+   "surface": "model_output",
+   "expected": []
+  },
+  {
+   "name": "unicode plain",
+   "value": "prefix décoy-ключ-鍵-12345 suffix",
+   "surface": "model_output",
+   "expected": [
+    {
+     "label": "unicode",
+     "fingerprint": "fdfb9f5679a329c2f294ffc6ce795d89ccb7b64d565aaf8293605cc6f4fba718",
+     "surface": "model_output",
+     "encoding": "plain"
+    }
+   ]
+  },
+  {
+   "name": "unicode plain nested",
+   "value": {
+    "args": {
+     "list": [
+      "x",
+      {
+       "deep": "décoy-ключ-鍵-12345"
+      }
+     ]
+    }
+   },
+   "surface": "tool_args",
+   "expected": [
+    {
+     "label": "unicode",
+     "fingerprint": "fdfb9f5679a329c2f294ffc6ce795d89ccb7b64d565aaf8293605cc6f4fba718",
+     "surface": "tool_args",
+     "encoding": "plain"
+    }
+   ]
+  },
+  {
+   "name": "unicode base64 padded",
+   "value": "x ZMOpY295LdC60LvRjtGHLemNtS0xMjM0NQ== y",
+   "surface": "model_output",
+   "expected": [
+    {
+     "label": "unicode",
+     "fingerprint": "fdfb9f5679a329c2f294ffc6ce795d89ccb7b64d565aaf8293605cc6f4fba718",
+     "surface": "model_output",
+     "encoding": "base64"
+    }
+   ]
+  },
+  {
+   "name": "unicode base64 unpadded",
+   "value": "ZMOpY295LdC60LvRjtGHLemNtS0xMjM0NQ",
+   "surface": "model_output",
+   "expected": [
+    {
+     "label": "unicode",
+     "fingerprint": "fdfb9f5679a329c2f294ffc6ce795d89ccb7b64d565aaf8293605cc6f4fba718",
+     "surface": "model_output",
+     "encoding": "base64"
+    }
+   ]
+  },
+  {
+   "name": "unicode base64url",
+   "value": "ZMOpY295LdC60LvRjtGHLemNtS0xMjM0NQ",
+   "surface": "tool_args",
+   "expected": [
+    {
+     "label": "unicode",
+     "fingerprint": "fdfb9f5679a329c2f294ffc6ce795d89ccb7b64d565aaf8293605cc6f4fba718",
+     "surface": "tool_args",
+     "encoding": "base64"
+    }
+   ]
+  },
+  {
+   "name": "unicode hex lower",
+   "value": "64c3a9636f792dd0bad0bbd18ed1872de98db52d3132333435",
+   "surface": "model_output",
+   "expected": [
+    {
+     "label": "unicode",
+     "fingerprint": "fdfb9f5679a329c2f294ffc6ce795d89ccb7b64d565aaf8293605cc6f4fba718",
+     "surface": "model_output",
+     "encoding": "hex"
+    }
+   ]
+  },
+  {
+   "name": "unicode hex upper",
+   "value": "k=64C3A9636F792DD0BAD0BBD18ED1872DE98DB52D3132333435",
+   "surface": "model_output",
+   "expected": [
+    {
+     "label": "unicode",
+     "fingerprint": "fdfb9f5679a329c2f294ffc6ce795d89ccb7b64d565aaf8293605cc6f4fba718",
+     "surface": "model_output",
+     "encoding": "hex"
+    }
+   ]
+  },
+  {
+   "name": "unicode percent uri",
+   "value": "d%C3%A9coy-%D0%BA%D0%BB%D1%8E%D1%87-%E9%8D%B5-12345",
+   "surface": "other",
+   "expected": [
+    {
+     "label": "unicode",
+     "fingerprint": "fdfb9f5679a329c2f294ffc6ce795d89ccb7b64d565aaf8293605cc6f4fba718",
+     "surface": "other",
+     "encoding": "percent"
+    }
+   ]
+  },
+  {
+   "name": "unicode percent all upper",
+   "value": "%64%C3%A9%63%6F%79%2D%D0%BA%D0%BB%D1%8E%D1%87%2D%E9%8D%B5%2D%31%32%33%34%35",
+   "surface": "model_output",
+   "expected": [
+    {
+     "label": "unicode",
+     "fingerprint": "fdfb9f5679a329c2f294ffc6ce795d89ccb7b64d565aaf8293605cc6f4fba718",
+     "surface": "model_output",
+     "encoding": "percent"
+    }
+   ]
+  },
+  {
+   "name": "unicode percent all lower",
+   "value": "%64%c3%a9%63%6f%79%2d%d0%ba%d0%bb%d1%8e%d1%87%2d%e9%8d%b5%2d%31%32%33%34%35",
+   "surface": "model_output",
+   "expected": [
+    {
+     "label": "unicode",
+     "fingerprint": "fdfb9f5679a329c2f294ffc6ce795d89ccb7b64d565aaf8293605cc6f4fba718",
+     "surface": "model_output",
+     "encoding": "percent"
+    }
+   ]
+  },
+  {
+   "name": "unicode percent plus-for-space",
+   "value": "d%C3%A9coy-%D0%BA%D0%BB%D1%8E%D1%87-%E9%8D%B5-12345",
+   "surface": "model_output",
+   "expected": [
+    {
+     "label": "unicode",
+     "fingerprint": "fdfb9f5679a329c2f294ffc6ce795d89ccb7b64d565aaf8293605cc6f4fba718",
+     "surface": "model_output",
+     "encoding": "percent"
+    }
+   ]
+  },
+  {
+   "name": "unicode spaced",
+   "value": "d é c o y - к л ю ч - 鍵 - 1 2 3 4 5",
+   "surface": "model_output",
+   "expected": [
+    {
+     "label": "unicode",
+     "fingerprint": "fdfb9f5679a329c2f294ffc6ce795d89ccb7b64d565aaf8293605cc6f4fba718",
+     "surface": "model_output",
+     "encoding": "spaced"
+    }
+   ]
+  },
+  {
+   "name": "unicode newline in middle",
+   "value": "décoy-к\nлюч-鍵-12345",
+   "surface": "model_output",
+   "expected": [
+    {
+     "label": "unicode",
+     "fingerprint": "fdfb9f5679a329c2f294ffc6ce795d89ccb7b64d565aaf8293605cc6f4fba718",
+     "surface": "model_output",
+     "encoding": "spaced"
+    }
+   ]
+  },
+  {
+   "name": "unicode truncated (no hit expected)",
+   "value": "décoy-ключ-鍵-123",
+   "surface": "model_output",
+   "expected": []
+  },
+  {
+   "name": "unicode reversed (no hit expected)",
+   "value": "54321-鍵-чюлк-yocéd",
+   "surface": "model_output",
+   "expected": []
+  },
+  {
+   "name": "unicode double base64 (nested encoding)",
+   "value": "Wk1PcFkyOTVMZEM2MEx2Ump0R0hMZW1OdFMweE1qTTBOUT09",
+   "surface": "model_output",
+   "expected": []
+  }
+ ]
+}
