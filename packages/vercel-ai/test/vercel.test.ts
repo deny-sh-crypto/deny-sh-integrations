@@ -424,6 +424,28 @@ test('stream middleware checks buffered output when consumer cancels', async () 
   assert.equal(hits.length, 1);
 });
 
+test('stream middleware applies backpressure to the source', async () => {
+  let pulls = 0;
+  const source = new ReadableStream({
+    pull(controller) {
+      pulls += 1;
+      if (pulls > 1000) controller.close();
+      else controller.enqueue({ type: 'text-delta' as const, id: 'text-1', delta: 'x' });
+    },
+  });
+  const model = wrapLanguageModel({
+    model: new MockLanguageModelV2({ doStream: { stream: source } }),
+    middleware: decoyWatchLanguageModelMiddleware(
+      createDecoyWatch({ decoys: ['decoy-vercel-backpressure-1234'], report: false }),
+    ),
+  });
+  const { stream } = await model.doStream({} as never);
+  const reader = stream.getReader();
+  for (let i = 0; i < 3; i += 1) assert.equal((await reader.read()).done, false);
+  assert.ok(pulls <= 10, `expected at most 10 source pulls, got ${pulls}`);
+  await reader.cancel('test complete');
+});
+
 test('stream middleware checks buffered output on source error and preserves source error', async () => {
   const decoy = 'decoy-vercel-source-error-1234';
   const sourceError = new Error('source failed');

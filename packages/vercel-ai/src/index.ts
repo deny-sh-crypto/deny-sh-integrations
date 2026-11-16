@@ -140,7 +140,8 @@ export function decoyWatchLanguageModelMiddleware(
       const toolBuffers = new Map<string, string>();
       const toolsWithDeltas = new Set<string>();
       let cancelled = false;
-      let pump: Promise<void>;
+      let finished = false;
+      let finalizing: Promise<void> | undefined;
 
       const append = async (buffers: Map<string, string>, id: string, delta: string) => {
         const next = (buffers.get(id) ?? '') + delta;
@@ -156,64 +157,62 @@ export function decoyWatchLanguageModelMiddleware(
         }
       };
 
-      const stream = new ReadableStream({
-        start(controller) {
-          pump = (async () => {
-            let sourceError: unknown;
-            let checkError: unknown;
-            try {
-              while (!cancelled) {
-                let read;
-                try {
-                  read = await reader.read();
-                } catch (error) {
-                  sourceError = error;
-                  break;
-                }
-                if (read.done) break;
-                const part = read.value;
-                try {
-                  if (part.type === 'text-delta') {
-                    await append(textBuffers, part.id, part.delta);
-                  } else if (part.type === 'tool-input-delta') {
-                    toolsWithDeltas.add(part.id);
-                    await append(toolBuffers, part.id, part.delta);
-                  } else if (part.type === 'tool-call' && !toolsWithDeltas.has(part.toolCallId)) {
-                    await append(toolBuffers, part.toolCallId, part.input);
-                  }
-                } catch (error) {
-                  checkError = error;
-                  await reader.cancel(error).catch(() => undefined);
-                  break;
-                }
-                if (!cancelled) controller.enqueue(part);
-              }
-            } finally {
-              if (checkError === undefined) {
-                try {
-                  await checkRemaining();
-                } catch (error) {
-                  checkError = error;
-                }
-              }
+      const finalize = (controller?: ReadableStreamDefaultController, terminalError?: unknown) => {
+        if (finalizing) return finalizing;
+        finished = true;
+        finalizing = (async () => {
+          let error = terminalError;
+          try {
+            await checkRemaining();
+          } catch (checkError) {
+            if (error === undefined) error = checkError;
+          } finally {
+            reader.releaseLock();
+          }
+          if (cancelled || !controller) return;
+          if (error !== undefined) controller.error(error);
+          else controller.close();
+        })();
+        return finalizing;
+      };
 
-              if (cancelled) return;
-              if (sourceError !== undefined) {
-                controller.error(sourceError);
-              } else if (checkError !== undefined) {
-                controller.error(checkError);
-              } else {
-                controller.close();
-              }
+      const stream = new ReadableStream({
+        async pull(controller) {
+          if (cancelled || finished) return;
+          let read;
+          try {
+            read = await reader.read();
+          } catch (error) {
+            await finalize(controller, error);
+            return;
+          }
+          if (read.done) {
+            await finalize(controller);
+            return;
+          }
+          const part = read.value;
+          try {
+            if (part.type === 'text-delta') {
+              await append(textBuffers, part.id, part.delta);
+            } else if (part.type === 'tool-input-delta') {
+              toolsWithDeltas.add(part.id);
+              await append(toolBuffers, part.id, part.delta);
+            } else if (part.type === 'tool-call' && !toolsWithDeltas.has(part.toolCallId)) {
+              await append(toolBuffers, part.toolCallId, part.input);
             }
-          })();
+          } catch (error) {
+            await reader.cancel(error).catch(() => undefined);
+            await finalize(controller, error);
+            return;
+          }
+          if (!cancelled) controller.enqueue(part);
         },
         async cancel(reason) {
           cancelled = true;
           try {
             await reader.cancel(reason);
           } finally {
-            await pump;
+            await finalize();
           }
         },
       });
