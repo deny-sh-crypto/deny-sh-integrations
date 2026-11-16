@@ -34,6 +34,10 @@ from .decoy import (
     DenyDecoyLeakError,
     create_decoy_watch,
 )
+from .guardrails import (
+    decoy_watch_output_guardrail,
+    decoy_watch_tool_input_guardrail,
+)
 from .tool import deny_vault_tool
 
 __all__ = [
@@ -46,6 +50,8 @@ __all__ = [
     "DecoyWatch",
     "DecoyHit",
     "DenyDecoyLeakError",
+    "decoy_watch_output_guardrail",
+    "decoy_watch_tool_input_guardrail",
 ]
 
 __version__ = "0.2.0"
