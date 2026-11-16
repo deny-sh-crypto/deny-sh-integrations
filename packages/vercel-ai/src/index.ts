@@ -109,12 +109,23 @@ export function denyVaultTool<TArgs = Record<string, unknown>, TResult = unknown
  * text used for structured output, is checked before the SDK returns it.
  * Streaming output is checked when the stream ends. Text already delivered to
  * the caller before the stream ends cannot be retracted, so streaming provides
- * end-of-stream detection and reporting, not prevention. A decoy split across
- * separate model calls is not joined.
+ * end-of-stream detection and reporting, not prevention. Text and tool-input
+ * buffers are isolated by id. Each buffer is checked after 256 KiB and reduced
+ * to a 16 KiB overlap; a decoy longer than that overlap split across the
+ * boundary is not joined. Final checks run on normal close, source error, and
+ * consumer cancellation. A decoy split across separate model calls is not
+ * joined.
  */
 export function decoyWatchLanguageModelMiddleware(
   watch: DecoyWatch,
+  options: { maxBufferChars?: number; overlapChars?: number } = {},
 ): LanguageModelMiddleware {
+  const maxBufferChars = options.maxBufferChars ?? 256 * 1024;
+  const overlapChars = options.overlapChars ?? 16 * 1024;
+  if (maxBufferChars <= 0 || overlapChars < 0 || overlapChars > maxBufferChars) {
+    throw new RangeError('Stream buffer limits require 0 <= overlapChars <= maxBufferChars.');
+  }
+
   return {
     middlewareVersion: 'v2',
     wrapGenerate: async ({ doGenerate }) => {
@@ -124,24 +135,88 @@ export function decoyWatchLanguageModelMiddleware(
     },
     wrapStream: async ({ doStream }) => {
       const result = await doStream();
-      let accumulatedText = '';
-      const stream = result.stream.pipeThrough(new TransformStream({
-        transform(part, controller) {
-          if (part.type === 'text-delta' || part.type === 'tool-input-delta') {
-            accumulatedText += part.delta;
-          } else if (part.type === 'tool-call') {
-            accumulatedText += part.input;
-          }
-          controller.enqueue(part);
+      const reader = result.stream.getReader();
+      const textBuffers = new Map<string, string>();
+      const toolBuffers = new Map<string, string>();
+      const toolsWithDeltas = new Set<string>();
+      let cancelled = false;
+      let pump: Promise<void>;
+
+      const append = async (buffers: Map<string, string>, id: string, delta: string) => {
+        const next = (buffers.get(id) ?? '') + delta;
+        buffers.set(id, next);
+        if (next.length > maxBufferChars) {
+          await watch.check(next, 'model_output');
+          buffers.set(id, next.slice(-overlapChars));
+        }
+      };
+      const checkRemaining = async () => {
+        for (const value of [...textBuffers.values(), ...toolBuffers.values()]) {
+          if (value.length > 0) await watch.check(value, 'model_output');
+        }
+      };
+
+      const stream = new ReadableStream({
+        start(controller) {
+          pump = (async () => {
+            let sourceError: unknown;
+            let checkError: unknown;
+            try {
+              while (!cancelled) {
+                let read;
+                try {
+                  read = await reader.read();
+                } catch (error) {
+                  sourceError = error;
+                  break;
+                }
+                if (read.done) break;
+                const part = read.value;
+                try {
+                  if (part.type === 'text-delta') {
+                    await append(textBuffers, part.id, part.delta);
+                  } else if (part.type === 'tool-input-delta') {
+                    toolsWithDeltas.add(part.id);
+                    await append(toolBuffers, part.id, part.delta);
+                  } else if (part.type === 'tool-call' && !toolsWithDeltas.has(part.toolCallId)) {
+                    await append(toolBuffers, part.toolCallId, part.input);
+                  }
+                } catch (error) {
+                  checkError = error;
+                  await reader.cancel(error).catch(() => undefined);
+                  break;
+                }
+                if (!cancelled) controller.enqueue(part);
+              }
+            } finally {
+              if (checkError === undefined) {
+                try {
+                  await checkRemaining();
+                } catch (error) {
+                  checkError = error;
+                }
+              }
+
+              if (cancelled) return;
+              if (sourceError !== undefined) {
+                controller.error(sourceError);
+              } else if (checkError !== undefined) {
+                controller.error(checkError);
+              } else {
+                controller.close();
+              }
+            }
+          })();
         },
-        async flush(controller) {
+        async cancel(reason) {
+          cancelled = true;
           try {
-            await watch.check(accumulatedText, 'model_output');
-          } catch (error) {
-            controller.error(error);
+            await reader.cancel(reason);
+          } finally {
+            await pump;
           }
         },
-      }));
+      });
       return { ...result, stream };
     },
   };

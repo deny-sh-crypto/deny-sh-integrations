@@ -108,6 +108,32 @@ test('clientOptions (per-tenant apiKey) are forwarded to the client', async () =
 
 type V2LanguageModel = Parameters<typeof wrapLanguageModel>[0]['model'];
 
+class MockLanguageModelV2 implements V2LanguageModel {
+  readonly specificationVersion = 'v2';
+  readonly provider: string;
+  readonly modelId: string;
+  readonly supportedUrls = {};
+  readonly doGenerate: V2LanguageModel['doGenerate'];
+  readonly doStream: V2LanguageModel['doStream'];
+
+  constructor({
+    provider = 'mock-provider',
+    modelId = 'mock-model',
+    doGenerate = async () => { throw new Error('generation is not implemented'); },
+    doStream = async () => { throw new Error('streaming is not implemented'); },
+  }: {
+    provider?: string;
+    modelId?: string;
+    doGenerate?: V2LanguageModel['doGenerate'];
+    doStream?: V2LanguageModel['doStream'] | Awaited<ReturnType<V2LanguageModel['doStream']>>;
+  } = {}) {
+    this.provider = provider;
+    this.modelId = modelId;
+    this.doGenerate = doGenerate;
+    this.doStream = typeof doStream === 'function' ? doStream : async () => doStream;
+  }
+}
+
 function scriptedModel(text: string): V2LanguageModel {
   return {
     specificationVersion: 'v2',
@@ -129,35 +155,31 @@ function scriptedModel(text: string): V2LanguageModel {
 }
 
 function streamingModel(textDeltas: string[]): V2LanguageModel {
-  return {
-    specificationVersion: 'v2',
+  return new MockLanguageModelV2({
     provider: 'deny-test',
     modelId: 'streaming',
-    supportedUrls: {},
-    async doGenerate() {
+    doGenerate: async () => {
       throw new Error('generation is not used in these tests');
     },
-    async doStream() {
-      return {
-        stream: simulateReadableStream({
-          chunks: [
-            { type: 'text-start' as const, id: 'text-1' },
-            ...textDeltas.map((delta) => ({
-              type: 'text-delta' as const,
-              id: 'text-1',
-              delta,
-            })),
-            { type: 'text-end' as const, id: 'text-1' },
-            {
-              type: 'finish' as const,
-              finishReason: 'stop' as const,
-              usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
-            },
-          ],
-        }),
-      };
+    doStream: {
+      stream: simulateReadableStream({
+        chunks: [
+          { type: 'text-start' as const, id: 'text-1' },
+          ...textDeltas.map((delta) => ({
+            type: 'text-delta' as const,
+            id: 'text-1',
+            delta,
+          })),
+          { type: 'text-end' as const, id: 'text-1' },
+          {
+            type: 'finish' as const,
+            finishReason: 'stop' as const,
+            usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
+          },
+        ],
+      }),
     },
-  };
+  });
 }
 
 async function consumeTextStream(model: V2LanguageModel): Promise<string> {
@@ -302,6 +324,115 @@ test('block:false streams full decoy text and reports one hit', async () => {
   assert.equal(await consumeTextStream(model), `full ${decoy}`);
   assert.equal(hits.length, 1);
   assert.equal(hits[0]?.surface, 'model_output');
+});
+
+test('stream middleware does not concatenate tool deltas with final tool-call input', async () => {
+  const hits: DecoyHit[] = [];
+  const model = wrapLanguageModel({
+    model: new MockLanguageModelV2({
+      doStream: {
+        stream: simulateReadableStream({
+          chunks: [
+            { type: 'tool-input-start' as const, id: 'call_1', toolName: 'clean' },
+            { type: 'tool-input-delta' as const, id: 'call_1', delta: 'abcd' },
+            { type: 'tool-input-end' as const, id: 'call_1' },
+            { type: 'tool-call' as const, toolCallId: 'call_1', toolName: 'clean', input: 'efgh' },
+          ],
+        }),
+      },
+    }),
+    middleware: decoyWatchLanguageModelMiddleware(createDecoyWatch({
+      decoys: ['abcdefgh'], report: false, block: false,
+      onLeak: (hit) => { hits.push(hit); },
+    })),
+  });
+  const { stream } = await model.doStream({} as never);
+  const reader = stream.getReader();
+  while (!(await reader.read()).done) { /* consume */ }
+  assert.equal(hits.length, 0);
+});
+
+test('stream middleware checks buffered output when consumer cancels', async () => {
+  const decoy = 'decoy-vercel-cancel-1234';
+  const hits: DecoyHit[] = [];
+  const model = wrapLanguageModel({
+    model: new MockLanguageModelV2({
+      doStream: {
+        stream: simulateReadableStream({
+          chunks: [
+            { type: 'text-delta' as const, id: 'text-1', delta: decoy },
+            { type: 'text-end' as const, id: 'text-1' },
+          ],
+          chunkDelayInMs: 50,
+        }),
+      },
+    }),
+    middleware: decoyWatchLanguageModelMiddleware(createDecoyWatch({
+      decoys: [decoy], report: false, block: false,
+      onLeak: (hit) => { hits.push(hit); },
+    })),
+  });
+  const { stream } = await model.doStream({} as never);
+  const reader = stream.getReader();
+  assert.equal((await reader.read()).done, false);
+  await reader.cancel('consumer stopped');
+  assert.equal(hits.length, 1);
+});
+
+test('stream middleware checks buffered output on source error and preserves source error', async () => {
+  const decoy = 'decoy-vercel-source-error-1234';
+  const sourceError = new Error('source failed');
+  const hits: DecoyHit[] = [];
+  let pullCount = 0;
+  const source = new ReadableStream({
+    pull(controller) {
+      if (pullCount++ === 0) {
+        controller.enqueue({ type: 'text-delta' as const, id: 'text-1', delta: decoy });
+      } else {
+        controller.error(sourceError);
+      }
+    },
+  });
+  const model = wrapLanguageModel({
+    model: new MockLanguageModelV2({ doStream: { stream: source } }),
+    middleware: decoyWatchLanguageModelMiddleware(createDecoyWatch({
+      decoys: [decoy], report: false,
+      onLeak: (hit) => { hits.push(hit); },
+    })),
+  });
+  const { stream } = await model.doStream({} as never);
+  const reader = stream.getReader();
+  await assert.rejects(async () => {
+    while (!(await reader.read()).done) { /* consume */ }
+  }, (error: unknown) => error === sourceError);
+  assert.equal(hits.length, 1);
+});
+
+test('stream middleware checks a buffer as soon as configured limit is exceeded', async () => {
+  const decoy = 'decoy123';
+  const hits: DecoyHit[] = [];
+  const model = wrapLanguageModel({
+    model: new MockLanguageModelV2({
+      doStream: {
+        stream: simulateReadableStream({
+          chunks: [
+            { type: 'text-delta' as const, id: 'text-1', delta: `xx${decoy}yy` },
+            { type: 'text-end' as const, id: 'text-1' },
+          ],
+          chunkDelayInMs: 50,
+        }),
+      },
+    }),
+    middleware: decoyWatchLanguageModelMiddleware(createDecoyWatch({
+      decoys: [decoy], report: false, block: false,
+      onLeak: (hit) => { hits.push(hit); },
+    }), { maxBufferChars: 10, overlapChars: 4 }),
+  });
+  const { stream } = await model.doStream({} as never);
+  const reader = stream.getReader();
+  assert.equal((await reader.read()).done, false);
+  assert.equal(hits.length, 1);
+  await reader.cancel('test complete');
 });
 
 test('tool-input wrapper blocks a decoy before execute runs', async () => {
