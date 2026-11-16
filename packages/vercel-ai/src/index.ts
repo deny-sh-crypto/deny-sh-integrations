@@ -137,6 +137,7 @@ export function decoyWatchLanguageModelMiddleware(
       const result = await doStream();
       const reader = result.stream.getReader();
       const textBuffers = new Map<string, string>();
+      const reasoningBuffers = new Map<string, string>();
       const toolBuffers = new Map<string, string>();
       const toolsWithDeltas = new Set<string>();
       let cancelled = false;
@@ -152,7 +153,9 @@ export function decoyWatchLanguageModelMiddleware(
         }
       };
       const checkRemaining = async () => {
-        for (const value of [...textBuffers.values(), ...toolBuffers.values()]) {
+        for (const value of [
+          ...textBuffers.values(), ...reasoningBuffers.values(), ...toolBuffers.values(),
+        ]) {
           if (value.length > 0) await watch.check(value, 'model_output');
         }
       };
@@ -194,11 +197,19 @@ export function decoyWatchLanguageModelMiddleware(
           try {
             if (part.type === 'text-delta') {
               await append(textBuffers, part.id, part.delta);
+            } else if (part.type === 'reasoning-delta') {
+              await append(reasoningBuffers, part.id, part.delta);
             } else if (part.type === 'tool-input-delta') {
               toolsWithDeltas.add(part.id);
               await append(toolBuffers, part.id, part.delta);
             } else if (part.type === 'tool-call' && !toolsWithDeltas.has(part.toolCallId)) {
               await append(toolBuffers, part.toolCallId, part.input);
+            } else if (![
+              'stream-start', 'text-start', 'text-end', 'reasoning-start', 'reasoning-end',
+              'tool-input-start', 'tool-input-end', 'tool-call', 'finish',
+              'response-metadata', 'error',
+            ].includes(part.type)) {
+              await watch.check(part, 'model_output');
             }
           } catch (error) {
             await reader.cancel(error).catch(() => undefined);

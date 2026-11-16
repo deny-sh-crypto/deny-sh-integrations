@@ -215,6 +215,24 @@ test('language-model middleware returns clean generateText output unchanged', as
   assert.equal(result.text, 'clean final output');
 });
 
+test('language-model middleware checks reasoning in generated content', async () => {
+  const decoy = 'decoy-vercel-reasoning-generate-1234';
+  const model = wrapLanguageModel({
+    model: new MockLanguageModelV2({
+      doGenerate: {
+        content: [{ type: 'reasoning', text: decoy }],
+        finishReason: 'stop',
+        usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
+        warnings: [],
+      },
+    }),
+    middleware: decoyWatchLanguageModelMiddleware(
+      createDecoyWatch({ decoys: [decoy], report: false }),
+    ),
+  });
+  await assert.rejects(async () => model.doGenerate({} as never), DenyDecoyLeakError);
+});
+
 test('language-model middleware blocks invalid raw tool-call input before schema validation', async () => {
   const decoy = 'decoy-vercel-invalid-tool-1234';
   let executions = 0;
@@ -316,6 +334,68 @@ test('stream middleware detects a decoy split across text deltas', async () => {
   assert.equal(await consumeTextStream(model), `contains ${decoy}`);
   assert.equal(hits.length, 1);
   assert.equal(hits[0]?.surface, 'model_output');
+});
+
+test('stream middleware detects a decoy split across reasoning deltas once', async () => {
+  const decoy = 'decoy-vercel-reasoning-1234';
+  const hits: DecoyHit[] = [];
+  const model = wrapLanguageModel({
+    model: new MockLanguageModelV2({ doStream: { stream: simulateReadableStream({ chunks: [
+      { type: 'reasoning-start' as const, id: 'reasoning-1' },
+      { type: 'reasoning-delta' as const, id: 'reasoning-1', delta: 'decoy-vercel-' },
+      { type: 'reasoning-delta' as const, id: 'reasoning-1', delta: 'reasoning-1234' },
+      { type: 'reasoning-end' as const, id: 'reasoning-1' },
+    ] }) } }),
+    middleware: decoyWatchLanguageModelMiddleware(createDecoyWatch({
+      decoys: [decoy], report: false, block: false, onLeak: (hit) => { hits.push(hit); },
+    })),
+  });
+  const { stream } = await model.doStream({} as never);
+  const reader = stream.getReader();
+  while (!(await reader.read()).done) { /* consume */ }
+  assert.equal(hits.length, 1);
+});
+
+test('stream middleware checks source and unknown output parts', async () => {
+  const decoy = 'decoy-vercel-structural-1234';
+  const hits: DecoyHit[] = [];
+  const chunks = [
+    { type: 'source', sourceType: 'url', id: 'source-1', url: `https://${decoy}.test`, title: decoy },
+    { type: 'future-output', value: decoy },
+  ];
+  const model = wrapLanguageModel({
+    model: new MockLanguageModelV2({
+      doStream: { stream: simulateReadableStream({ chunks }) as never },
+    }),
+    middleware: decoyWatchLanguageModelMiddleware(createDecoyWatch({
+      decoys: [decoy], report: false, block: false, onLeak: (hit) => { hits.push(hit); },
+    })),
+  });
+  const { stream } = await model.doStream({} as never);
+  const reader = stream.getReader();
+  while (!(await reader.read()).done) { /* consume */ }
+  assert.equal(hits.length, 2);
+});
+
+test('stream middleware ignores pure control parts', async () => {
+  const hits: DecoyHit[] = [];
+  const model = wrapLanguageModel({
+    model: new MockLanguageModelV2({ doStream: { stream: simulateReadableStream({ chunks: [
+      { type: 'stream-start' as const, warnings: [] },
+      { type: 'text-start' as const, id: 'text-1' },
+      { type: 'text-end' as const, id: 'text-1' },
+      { type: 'reasoning-start' as const, id: 'reasoning-1' },
+      { type: 'reasoning-end' as const, id: 'reasoning-1' },
+    ] }) } }),
+    middleware: decoyWatchLanguageModelMiddleware(createDecoyWatch({
+      decoys: ['decoy-vercel-control-1234'], report: false,
+      onLeak: (hit) => { hits.push(hit); },
+    })),
+  });
+  const { stream } = await model.doStream({} as never);
+  const reader = stream.getReader();
+  while (!(await reader.read()).done) { /* consume */ }
+  assert.equal(hits.length, 0);
 });
 
 test('blocking stream middleware rejects with a decoy-free error', async () => {
