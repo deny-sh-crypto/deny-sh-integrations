@@ -21,9 +21,9 @@ def decoy_watch_output_guardrail(watch: DecoyWatch):
             return GuardrailFunctionOutput(
                 output_info={"hits": hits}, tripwire_triggered=False
             )
-        except DenyDecoyLeakError:
+        except DenyDecoyLeakError as error:
             return GuardrailFunctionOutput(
-                output_info={"hits": watch.scan(agent_output, "model_output")},
+                output_info={"hits": error.hits},
                 tripwire_triggered=True,
             )
 
@@ -40,9 +40,9 @@ def decoy_watch_tool_input_guardrail(watch: DecoyWatch):
         try:
             hits = await watch.acheck(arguments, "tool_args")
             return ToolGuardrailFunctionOutput.allow({"hits": hits})
-        except DenyDecoyLeakError:
+        except DenyDecoyLeakError as error:
             return ToolGuardrailFunctionOutput.raise_exception(
-                {"hits": watch.scan(arguments, "tool_args")}
+                {"hits": error.hits}
             )
 
     return guardrail

@@ -24,6 +24,9 @@ DecoyEncoding = Literal["plain", "base64", "base64url", "hex", "percent", "space
 
 _DEFAULT_API_BASE_URL = "https://deny.sh/api"
 _DEFAULT_REPORT_TIMEOUT = 3.0
+_MAX_SCAN_DEPTH = 64
+_MAX_SCAN_NODES = 100_000
+_MAX_SCAN_TEXT_BYTES = 8 * 1024 * 1024
 if __package__ == "deny_sh_langchain":
     _DECOY_SOURCE = "deny-sh-langchain-py/0.2.0"
 else:
@@ -43,8 +46,9 @@ class DenyDecoyLeakError(Exception):
 
     code = "deny_decoy_leak"
 
-    def __init__(self) -> None:
+    def __init__(self, hits: Optional[Sequence[DecoyHit]] = None) -> None:
         super().__init__("A configured decoy was detected in agent-visible data.")
+        self.hits = list(hits or ())
 
 
 @dataclass(frozen=True)
@@ -108,99 +112,235 @@ def _normalize_decoy(entry: Any) -> _NormalizedDecoy:
     )
 
 
-def _append_text(raws: List[str], value: str) -> None:
-    if value:
+def _append_text(raws: List[str], value: str, collected: int) -> Tuple[int, bool]:
+    if not value:
+        return collected, False
+    try:
+        encoded = value.encode("utf-8", "replace")
+    except Exception:
+        return collected, False
+    remaining = _MAX_SCAN_TEXT_BYTES - collected
+    if len(encoded) <= remaining:
         raws.append(value)
+        return collected + len(encoded), False
+    if remaining:
+        raws.append(encoded[:remaining].decode("utf-8", "ignore"))
+    return _MAX_SCAN_TEXT_BYTES, True
 
 
 def _collect_raw_texts(value: Any) -> List[str]:
     raws: List[str] = []
     seen: set[int] = set()
+    stack: List[Tuple[Any, int]] = [(value, 0)]
+    visited = 0
+    collected = 0
 
-    def visit(item: Any) -> None:
-        if item is None:
-            return
-        if isinstance(item, str):
-            _append_text(raws, item)
-            return
-        if isinstance(item, (bytes, bytearray, memoryview)):
-            data = bytes(item)
-            latin1 = data.decode("latin-1")
-            _append_text(raws, latin1)
-            utf8 = data.decode("utf-8", "replace")
-            if utf8 != latin1:
-                _append_text(raws, utf8)
-            return
-        if isinstance(item, (int, float, bool, complex)):
-            _append_text(raws, str(item))
-            return
-        if inspect.isroutine(item):
-            try:
-                _append_text(raws, inspect.getsource(item))
-            except Exception:
-                _append_text(raws, str(item))
-            return
+    def append(text: str) -> bool:
+        nonlocal collected
+        collected, limit_hit = _append_text(raws, text, collected)
+        return limit_hit
 
-        item_id = id(item)
-        if item_id in seen:
-            return
-        seen.add(item_id)
+    def push(nested: Any, depth: int) -> bool:
+        if visited + len(stack) >= _MAX_SCAN_NODES:
+            return True
+        stack.append((nested, depth + 1))
+        return False
 
-        if isinstance(item, Mapping):
-            for key, nested in item.items():
-                visit(key)
-                visit(nested)
-            return
-        if isinstance(item, (list, tuple, set, frozenset)):
-            for nested in item:
-                visit(nested)
-            return
-
-        visited_names: set[str] = set()
-        if is_dataclass(item) and not isinstance(item, type):
-            for field in fields(item):
-                visited_names.add(field.name)
+    while stack:
+        if visited >= _MAX_SCAN_NODES:
+            break
+        item, depth = stack.pop()
+        visited += 1
+        if depth > _MAX_SCAN_DEPTH:
+            break
+        try:
+            if item is None:
+                continue
+            if isinstance(item, str):
+                if append(item):
+                    break
+                continue
+            if isinstance(item, (bytes, bytearray, memoryview)):
                 try:
-                    visit(getattr(item, field.name))
+                    data = bytes(item)
+                    latin1 = data.decode("latin-1")
+                    if append(latin1):
+                        break
+                    utf8 = data.decode("utf-8", "replace")
+                    if utf8 != latin1 and append(utf8):
+                        break
                 except Exception:
                     continue
-
-        instance_values = getattr(item, "__dict__", None)
-        if isinstance(instance_values, dict):
-            for name, nested in instance_values.items():
-                visited_names.add(str(name))
-                visit(name)
-                visit(nested)
-
-        for cls in type(item).__mro__:
-            slots = vars(cls).get("__slots__")
-            if slots:
-                for name in (slots,) if isinstance(slots, str) else slots:
-                    if name in visited_names:
-                        continue
-                    visited_names.add(name)
+                continue
+            if isinstance(item, (int, float, bool, complex)):
+                try:
+                    rendered = str(item)
+                except Exception:
+                    continue
+                if append(rendered):
+                    break
+                continue
+            try:
+                routine = inspect.isroutine(item)
+            except Exception:
+                routine = False
+            if routine:
+                try:
+                    rendered = inspect.getsource(item)
+                except Exception:
                     try:
-                        visit(getattr(item, name))
+                        rendered = str(item)
                     except Exception:
                         continue
-            for name, descriptor in vars(cls).items():
-                if not isinstance(descriptor, property) or name in visited_names:
-                    continue
-                visited_names.add(name)
+                if append(rendered):
+                    break
+                continue
+
+            item_id = id(item)
+            if item_id in seen:
+                continue
+            seen.add(item_id)
+
+            if isinstance(item, Mapping):
                 try:
-                    with warnings.catch_warnings():
-                        warnings.simplefilter("ignore", DeprecationWarning)
-                        visit(getattr(item, name))
+                    iterator = iter(item.items())
                 except Exception:
                     continue
-        try:
-            rendered = str(item)
-        except Exception:
-            return
-        if not (rendered.startswith("<") and rendered.endswith(">")):
-            _append_text(raws, rendered)
+                while True:
+                    try:
+                        key, nested = next(iterator)
+                    except StopIteration:
+                        break
+                    except Exception:
+                        break
+                    if push(key, depth) or push(nested, depth):
+                        return raws
+                continue
+            if isinstance(item, (list, tuple, set, frozenset)):
+                try:
+                    iterator = iter(item)
+                except Exception:
+                    continue
+                while True:
+                    try:
+                        nested = next(iterator)
+                    except StopIteration:
+                        break
+                    except Exception:
+                        break
+                    if push(nested, depth):
+                        return raws
+                continue
 
-    visit(value)
+            visited_names: set[str] = set()
+            try:
+                dataclass_instance = is_dataclass(item) and not isinstance(item, type)
+            except Exception:
+                dataclass_instance = False
+            if dataclass_instance:
+                try:
+                    field_iterator = iter(fields(item))
+                except Exception:
+                    field_iterator = iter(())
+                while True:
+                    try:
+                        field = next(field_iterator)
+                    except StopIteration:
+                        break
+                    except Exception:
+                        break
+                    try:
+                        name = field.name
+                        visited_names.add(name)
+                        nested = getattr(item, name)
+                    except Exception:
+                        continue
+                    if push(nested, depth):
+                        return raws
+
+            try:
+                instance_values = getattr(item, "__dict__", None)
+            except Exception:
+                instance_values = None
+            if isinstance(instance_values, dict):
+                try:
+                    instance_iterator = iter(instance_values.items())
+                except Exception:
+                    instance_iterator = iter(())
+                while True:
+                    try:
+                        name, nested = next(instance_iterator)
+                    except StopIteration:
+                        break
+                    except Exception:
+                        break
+                    if isinstance(name, str):
+                        visited_names.add(name)
+                    if push(name, depth) or push(nested, depth):
+                        return raws
+
+            try:
+                class_iterator = iter(type(item).__mro__)
+            except Exception:
+                class_iterator = iter(())
+            while True:
+                try:
+                    cls = next(class_iterator)
+                except StopIteration:
+                    break
+                except Exception:
+                    break
+                try:
+                    class_vars = vars(cls)
+                    slots = class_vars.get("__slots__")
+                except Exception:
+                    continue
+                if slots:
+                    try:
+                        slot_names = (slots,) if isinstance(slots, str) else tuple(slots)
+                    except Exception:
+                        slot_names = ()
+                    for name in slot_names:
+                        try:
+                            if name in visited_names:
+                                continue
+                            visited_names.add(name)
+                            nested = getattr(item, name)
+                        except Exception:
+                            continue
+                        if push(nested, depth):
+                            return raws
+                try:
+                    property_iterator = iter(class_vars.items())
+                except Exception:
+                    property_iterator = iter(())
+                while True:
+                    try:
+                        name, descriptor = next(property_iterator)
+                    except StopIteration:
+                        break
+                    except Exception:
+                        break
+                    try:
+                        if not isinstance(descriptor, property) or name in visited_names:
+                            continue
+                        visited_names.add(name)
+                        with warnings.catch_warnings():
+                            warnings.simplefilter("ignore", DeprecationWarning)
+                            nested = getattr(item, name)
+                    except Exception:
+                        continue
+                    if push(nested, depth):
+                        return raws
+            try:
+                rendered = str(item)
+            except Exception:
+                continue
+            if not (rendered.startswith("<") and rendered.endswith(">")):
+                if append(rendered):
+                    break
+        except Exception:
+            continue
     return raws
 
 
@@ -220,17 +360,22 @@ def _percent_decode(text: str) -> str:
 def _collect_scan_texts(value: Any) -> List[_ScanText]:
     texts: List[_ScanText] = []
     for raw in _collect_raw_texts(value):
-        decoded = _percent_decode(raw)
-        form = decoded.replace("+", " ") if "+" in decoded else decoded
-        texts.append(
-            _ScanText(
-                raw=raw,
-                lower=raw.lower(),
-                percent_decoded=decoded if decoded != raw else None,
-                form_decoded=form if form != raw else None,
-                unspaced=re.sub(r"\s", "", raw) if re.search(r"\s", raw) else raw,
+        try:
+            decoded = _percent_decode(raw)
+            form = decoded.replace("+", " ") if "+" in decoded else decoded
+            texts.append(
+                _ScanText(
+                    raw=raw,
+                    lower=raw.lower(),
+                    percent_decoded=decoded if decoded != raw else None,
+                    form_decoded=form if form != raw else None,
+                    unspaced=(
+                        re.sub(r"\s", "", raw) if re.search(r"\s", raw) else raw
+                    ),
+                )
             )
-        )
+        except Exception:
+            continue
     return texts
 
 
@@ -330,10 +475,16 @@ class DecoyWatch:
         self._transport = transport
 
     def scan(self, value: Any, surface: DecoySurface = "other") -> List[DecoyHit]:
-        texts = _collect_scan_texts(value)
+        try:
+            texts = _collect_scan_texts(value)
+        except Exception:
+            texts = []
         hits: List[DecoyHit] = []
         for decoy in self._decoys:
-            encoding = _matching_encoding(texts, decoy)
+            try:
+                encoding = _matching_encoding(texts, decoy)
+            except Exception:
+                continue
             if encoding is not None:
                 hits.append(
                     DecoyHit(
@@ -430,7 +581,7 @@ class DecoyWatch:
                 _run_bounded(lambda hit=hit: self._on_leak(hit), self._report_timeout)
             self._report_hit(hit)
         if self._block and hits:
-            raise DenyDecoyLeakError()
+            raise DenyDecoyLeakError(hits)
         return hits
 
     async def acheck(

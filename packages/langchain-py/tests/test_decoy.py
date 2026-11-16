@@ -1,5 +1,6 @@
 import asyncio
 import json
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -67,6 +68,56 @@ def test_nested_python_containers_dataclass_pydantic_and_bytes():
     watch = create_decoy_watch([DECOY], report=False, block=False)
     for name, value in values.items():
         assert len(watch.scan(value)) == 1, name
+
+
+def test_scanner_skips_raising_property_and_finds_other_fields():
+    class Carrier:
+        def __init__(self):
+            self.safe = DECOY
+
+        @property
+        def hostile(self):
+            raise RuntimeError(DECOY)
+
+    watch = create_decoy_watch([DECOY], report=False)
+    assert len(watch.scan(Carrier())) == 1
+    with pytest.raises(DenyDecoyLeakError) as error:
+        watch.check(Carrier())
+    assert DECOY not in str(error.value)
+
+
+def test_scanner_skips_mapping_with_raising_items():
+    class HostileMapping(Mapping):
+        def __getitem__(self, key):
+            raise KeyError(key)
+
+        def __iter__(self):
+            return iter(())
+
+        def __len__(self):
+            return 0
+
+        def items(self):
+            raise RuntimeError(DECOY)
+
+    watch = create_decoy_watch([DECOY], report=False, block=False)
+    assert watch.scan(HostileMapping()) == []
+
+
+def test_scanner_depth_limit_prevents_recursion_error():
+    value = []
+    for _ in range(10_000):
+        value = [value]
+    watch = create_decoy_watch([DECOY], report=False, block=False)
+    assert watch.scan(value) == []
+
+
+def test_scanner_cyclic_structure_terminates():
+    value = []
+    value.append(value)
+    value.append(DECOY)
+    watch = create_decoy_watch([DECOY], report=False, block=False)
+    assert len(watch.scan(value)) == 1
 
 
 def test_report_body_and_base_url_contain_no_decoy():
