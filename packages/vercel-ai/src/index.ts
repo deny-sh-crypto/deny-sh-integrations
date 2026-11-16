@@ -35,7 +35,9 @@
  */
 
 import { tool } from 'ai';
+import type { LanguageModelMiddleware, Tool, ToolCallOptions } from 'ai';
 import {
+  type DecoyWatch,
   createVaultResolver,
   type DenyVaultClientOptions,
   type VaultClient,
@@ -100,5 +102,62 @@ export function denyVaultTool<TArgs = Record<string, unknown>, TResult = unknown
   } as any);
 }
 
-export { createVaultResolver, DenyToolError, DenyLeakError, isNarrowed } from 'deny-sh-integrations-core';
-export type { DenyVaultClientOptions, VaultClient } from 'deny-sh-integrations-core';
+/**
+ * Create AI SDK language-model middleware that checks generated output.
+ *
+ * Attach it with `wrapLanguageModel`. `generateText` output, including JSON
+ * text used for structured output, is checked before the SDK returns it. This
+ * middleware does not wrap `doStream`: `streamText` chunks may already reach
+ * the caller and cannot be retracted, so streaming output is not covered.
+ */
+export function decoyWatchLanguageModelMiddleware(
+  watch: DecoyWatch,
+): LanguageModelMiddleware {
+  return {
+    middlewareVersion: 'v2',
+    wrapGenerate: async ({ doGenerate }) => {
+      const result = await doGenerate();
+      await watch.check(result.content, 'model_output');
+      return result;
+    },
+  };
+}
+
+/**
+ * Wrap an AI SDK tool so validated input is checked before execution.
+ *
+ * Tool metadata and hooks are preserved. Tools without `execute` are returned
+ * unchanged; a blocking hit rejects before the inner `execute` function runs.
+ */
+export function decoyWatchToolInput<TInput, TOutput>(
+  watch: DecoyWatch,
+  inner: Tool<TInput, TOutput>,
+): Tool<TInput, TOutput> {
+  const execute = inner.execute;
+  if (!execute) return inner;
+  return {
+    ...inner,
+    execute: async (input: TInput, options: ToolCallOptions) => {
+      await watch.check(input, 'tool_args');
+      return execute(input, options);
+    },
+  } as unknown as Tool<TInput, TOutput>;
+}
+
+export {
+  createDecoyWatch,
+  createVaultResolver,
+  DenyDecoyLeakError,
+  DenyToolError,
+  DenyLeakError,
+  isNarrowed,
+} from 'deny-sh-integrations-core';
+export type {
+  DecoyEncoding,
+  DecoyHit,
+  DecoySurface,
+  DecoyWatch,
+  DecoyWatchConfig,
+  DenyVaultClientOptions,
+  VaultClient,
+} from 'deny-sh-integrations-core';
