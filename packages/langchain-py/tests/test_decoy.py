@@ -5,7 +5,9 @@ import threading
 import time
 from collections.abc import Mapping
 from dataclasses import dataclass
+from decimal import Decimal
 from pathlib import Path
+from uuid import UUID
 
 import pytest
 from pydantic import BaseModel
@@ -105,6 +107,64 @@ def test_scanner_skips_mapping_with_raising_items():
 
     watch = create_decoy_watch([DECOY], report=False, block=False)
     assert watch.scan(HostileMapping()) == []
+
+    blocking = create_decoy_watch([DECOY], report=False)
+    with pytest.raises(DenyToolError) as error:
+        blocking.check(HostileMapping())
+    assert error.value.code == "deny_scan_limit"
+
+
+def test_scanner_never_calls_properties():
+    class DataCarrier:
+        def __init__(self):
+            self.value = DECOY
+
+        @property
+        def hostile(self):
+            raise RuntimeError("property called")
+
+    class PropertyOnly:
+        @property
+        def hidden(self):
+            return DECOY
+
+    class BlockingProperty:
+        @property
+        def blocked(self):
+            threading.Event().wait()
+
+    watch = create_decoy_watch([DECOY], report=False)
+    assert len(watch.scan(DataCarrier())) == 1
+    assert watch.check(PropertyOnly()) == []
+
+    completed = threading.Event()
+
+    def scan_blocking_property():
+        assert watch.scan(BlockingProperty()) == []
+        completed.set()
+
+    threading.Thread(target=scan_blocking_property, daemon=True).start()
+    assert completed.wait(0.5)
+
+
+def test_scanner_renders_data_values_without_instance_storage():
+    values = [
+        Decimal("12345678.9"),
+        UUID("12345678-1234-5678-1234-567812345678"),
+        Path("path-decoy-1234"),
+    ]
+    for value in values:
+        watch = create_decoy_watch([str(value)], report=False, block=False)
+        assert len(watch.scan(value)) == 1
+
+
+def test_scanner_skips_function_objects():
+    def function_with_decoy_name():
+        return DECOY
+
+    watch = create_decoy_watch([DECOY], report=False)
+    assert watch.scan(function_with_decoy_name) == []
+    assert watch.check(function_with_decoy_name) == []
 
 
 def test_scanner_depth_limit_prevents_recursion_error():

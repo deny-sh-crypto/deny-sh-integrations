@@ -1,23 +1,32 @@
-"""Framework-neutral decoy detection and reporting."""
+"""Scan strings, bytes, scalars, containers, and declared instance data for decoys.
+
+Properties, callables, and custom ``__str__`` methods on objects with instance data
+are not inspected. Any unreadable data carrier makes a clean scan incomplete so a
+blocking watch fails closed.
+"""
 
 from __future__ import annotations
 
 import asyncio
 import base64
 import concurrent.futures
+import datetime
 import hashlib
 import inspect
 import json
+import numbers
 import os
 import queue
 import re
 import threading
 import time
-import warnings
 from dataclasses import dataclass, fields, is_dataclass
+from enum import Enum
+from pathlib import PurePath
 from typing import Any, Callable, Dict, List, Literal, Mapping, Optional, Sequence, Tuple
 from urllib import error as urlerror, request
 from urllib.parse import urlsplit
+from uuid import UUID
 
 from .core import DenyToolError
 
@@ -115,20 +124,22 @@ def _normalize_decoy(entry: Any) -> _NormalizedDecoy:
     )
 
 
-def _append_text(raws: List[str], value: str, collected: int) -> Tuple[int, bool]:
+def _append_text(
+    raws: List[str], value: str, collected: int
+) -> Tuple[int, bool, bool]:
     if not value:
-        return collected, False
+        return collected, False, False
     try:
         encoded = value.encode("utf-8", "replace")
     except Exception:
-        return collected, False
+        return collected, False, True
     remaining = _MAX_SCAN_TEXT_BYTES - collected
     if len(encoded) <= remaining:
         raws.append(value)
-        return collected + len(encoded), False
+        return collected + len(encoded), False, False
     if remaining:
         raws.append(encoded[:remaining].decode("utf-8", "ignore"))
-    return _MAX_SCAN_TEXT_BYTES, True
+    return _MAX_SCAN_TEXT_BYTES, True, False
 
 
 def _collect_raw_texts(value: Any) -> Tuple[List[str], bool]:
@@ -140,8 +151,10 @@ def _collect_raw_texts(value: Any) -> Tuple[List[str], bool]:
     incomplete = False
 
     def append(text: str) -> bool:
-        nonlocal collected
-        collected, limit_hit = _append_text(raws, text, collected)
+        nonlocal collected, incomplete
+        collected, limit_hit, failed = _append_text(raws, text, collected)
+        if failed:
+            incomplete = True
         return limit_hit
 
     def push(nested: Any, depth: int) -> bool:
@@ -179,12 +192,24 @@ def _collect_raw_texts(value: Any) -> Tuple[List[str], bool]:
                         incomplete = True
                         break
                 except Exception:
-                    continue
+                    incomplete = True
                 continue
-            if isinstance(item, (int, float, bool, complex)):
+            if isinstance(
+                item,
+                (
+                    numbers.Number,
+                    UUID,
+                    PurePath,
+                    datetime.date,
+                    datetime.time,
+                    datetime.timedelta,
+                    Enum,
+                ),
+            ):
                 try:
                     rendered = str(item)
                 except Exception:
+                    incomplete = True
                     continue
                 if append(rendered):
                     incomplete = True
@@ -195,16 +220,6 @@ def _collect_raw_texts(value: Any) -> Tuple[List[str], bool]:
             except Exception:
                 routine = False
             if routine:
-                try:
-                    rendered = inspect.getsource(item)
-                except Exception:
-                    try:
-                        rendered = str(item)
-                    except Exception:
-                        continue
-                if append(rendered):
-                    incomplete = True
-                    break
                 continue
 
             item_id = id(item)
@@ -216,6 +231,7 @@ def _collect_raw_texts(value: Any) -> Tuple[List[str], bool]:
                 try:
                     iterator = iter(item.items())
                 except Exception:
+                    incomplete = True
                     continue
                 while True:
                     try:
@@ -223,6 +239,7 @@ def _collect_raw_texts(value: Any) -> Tuple[List[str], bool]:
                     except StopIteration:
                         break
                     except Exception:
+                        incomplete = True
                         break
                     if push(key, depth) or push(nested, depth):
                         return raws, True
@@ -231,6 +248,7 @@ def _collect_raw_texts(value: Any) -> Tuple[List[str], bool]:
                 try:
                     iterator = iter(item)
                 except Exception:
+                    incomplete = True
                     continue
                 while True:
                     try:
@@ -238,6 +256,7 @@ def _collect_raw_texts(value: Any) -> Tuple[List[str], bool]:
                     except StopIteration:
                         break
                     except Exception:
+                        incomplete = True
                         break
                     if push(nested, depth):
                         return raws, True
@@ -250,109 +269,112 @@ def _collect_raw_texts(value: Any) -> Tuple[List[str], bool]:
                 dataclass_instance = False
             if dataclass_instance:
                 try:
-                    field_iterator = iter(fields(item))
+                    dataclass_fields = fields(item)
                 except Exception:
-                    field_iterator = iter(())
-                while True:
+                    dataclass_fields = ()
+                    incomplete = True
+                for field in dataclass_fields:
+                    name = field.name
+                    visited_names.add(name)
                     try:
-                        field = next(field_iterator)
-                    except StopIteration:
-                        break
-                    except Exception:
-                        break
-                    try:
-                        name = field.name
-                        visited_names.add(name)
                         nested = getattr(item, name)
                     except Exception:
+                        incomplete = True
                         continue
                     if push(nested, depth):
                         return raws, True
 
             try:
-                instance_values = getattr(item, "__dict__", None)
+                classes = type(item).__mro__
+            except Exception:
+                classes = ()
+                incomplete = True
+            try:
+                supports_instance_dict = any(
+                    "__dict__" in vars(cls) for cls in classes
+                )
+            except Exception:
+                supports_instance_dict = True
+                incomplete = True
+
+            has_instance_dict = False
+            try:
+                instance_values = getattr(item, "__dict__")
+                has_instance_dict = True
+            except AttributeError:
+                instance_values = None
+                if supports_instance_dict:
+                    has_instance_dict = True
+                    incomplete = True
             except Exception:
                 instance_values = None
+                has_instance_dict = True
+                incomplete = True
             if isinstance(instance_values, dict):
                 try:
                     instance_iterator = iter(instance_values.items())
                 except Exception:
                     instance_iterator = iter(())
+                    incomplete = True
                 while True:
                     try:
                         name, nested = next(instance_iterator)
                     except StopIteration:
                         break
                     except Exception:
+                        incomplete = True
                         break
                     if isinstance(name, str):
                         visited_names.add(name)
                     if push(name, depth) or push(nested, depth):
                         return raws, True
+            elif has_instance_dict:
+                incomplete = True
 
-            try:
-                class_iterator = iter(type(item).__mro__)
-            except Exception:
-                class_iterator = iter(())
-            while True:
+            has_slots = False
+            for cls in classes:
                 try:
-                    cls = next(class_iterator)
-                except StopIteration:
-                    break
+                    slots = vars(cls).get("__slots__")
                 except Exception:
-                    break
-                try:
-                    class_vars = vars(cls)
-                    slots = class_vars.get("__slots__")
-                except Exception:
+                    incomplete = True
                     continue
-                if slots:
-                    try:
-                        slot_names = (slots,) if isinstance(slots, str) else tuple(slots)
-                    except Exception:
-                        slot_names = ()
-                    for name in slot_names:
-                        try:
-                            if name in visited_names:
-                                continue
-                            visited_names.add(name)
-                            nested = getattr(item, name)
-                        except Exception:
-                            continue
-                        if push(nested, depth):
-                            return raws, True
+                if slots is None:
+                    continue
+                has_slots = True
                 try:
-                    property_iterator = iter(class_vars.items())
+                    slot_names = (slots,) if isinstance(slots, str) else tuple(slots)
                 except Exception:
-                    property_iterator = iter(())
-                while True:
-                    try:
-                        name, descriptor = next(property_iterator)
-                    except StopIteration:
-                        break
-                    except Exception:
-                        break
-                    try:
-                        if not isinstance(descriptor, property) or name in visited_names:
-                            continue
-                        visited_names.add(name)
-                        with warnings.catch_warnings():
-                            warnings.simplefilter("ignore", DeprecationWarning)
-                            nested = getattr(item, name)
-                    except Exception:
+                    incomplete = True
+                    continue
+                for name in slot_names:
+                    if name in {"__dict__", "__weakref__"} or name in visited_names:
                         continue
+                    visited_names.add(name)
+                    try:
+                        nested = getattr(item, name)
+                    except AttributeError:
+                        incomplete = True
+                        continue
+                    except Exception:
+                        incomplete = True
+                        continue
+                    if name in {"__pydantic_extra__", "__pydantic_private__"}:
+                        if not isinstance(nested, dict):
+                            continue
                     if push(nested, depth):
                         return raws, True
-            try:
-                rendered = str(item)
-            except Exception:
-                continue
-            if not (rendered.startswith("<") and rendered.endswith(">")):
+
+            if not has_instance_dict and not has_slots:
+                try:
+                    rendered = str(item)
+                except Exception:
+                    incomplete = True
+                    continue
                 if append(rendered):
                     incomplete = True
                     break
         except Exception:
-            continue
+            incomplete = True
     return raws, incomplete
 
 
@@ -388,6 +410,7 @@ def _collect_scan_texts(value: Any) -> Tuple[List[_ScanText], bool]:
                 )
             )
         except Exception:
+            incomplete = True
             continue
     return texts, incomplete
 
