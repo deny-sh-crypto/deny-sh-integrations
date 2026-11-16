@@ -14,6 +14,7 @@ import {
   decoyWatchLanguageModelMiddleware,
   decoyWatchToolInput,
   denyVaultTool,
+  DenyDecoyLeakError,
   DenyLeakError,
   type DecoyHit,
   type VaultClient,
@@ -124,12 +125,12 @@ class MockLanguageModelV2 implements V2LanguageModel {
   }: {
     provider?: string;
     modelId?: string;
-    doGenerate?: V2LanguageModel['doGenerate'];
+    doGenerate?: V2LanguageModel['doGenerate'] | Awaited<ReturnType<V2LanguageModel['doGenerate']>>;
     doStream?: V2LanguageModel['doStream'] | Awaited<ReturnType<V2LanguageModel['doStream']>>;
   } = {}) {
     this.provider = provider;
     this.modelId = modelId;
-    this.doGenerate = doGenerate;
+    this.doGenerate = typeof doGenerate === 'function' ? doGenerate : async () => doGenerate;
     this.doStream = typeof doStream === 'function' ? doStream : async () => doStream;
   }
 }
@@ -212,6 +213,50 @@ test('language-model middleware returns clean generateText output unchanged', as
   });
   const result = await generateText({ model, prompt: 'prompt' });
   assert.equal(result.text, 'clean final output');
+});
+
+test('language-model middleware blocks invalid raw tool-call input before schema validation', async () => {
+  const decoy = 'decoy-vercel-invalid-tool-1234';
+  let executions = 0;
+  const model = wrapLanguageModel({
+    model: new MockLanguageModelV2({
+      doGenerate: {
+        content: [{
+          type: 'tool-call',
+          toolCallId: 'call_invalid',
+          toolName: 'invalidTool',
+          input: JSON.stringify({ count: decoy }),
+        }],
+        finishReason: 'tool-calls',
+        usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
+        warnings: [],
+      },
+    }),
+    middleware: decoyWatchLanguageModelMiddleware(
+      createDecoyWatch({ decoys: [decoy], report: false }),
+    ),
+  });
+  const guardedTool = decoyWatchToolInput(
+    createDecoyWatch({ decoys: [decoy], report: false }),
+    tool({
+      description: 'Requires numeric count',
+      inputSchema: z.object({ count: z.number() }),
+      execute: async () => {
+        executions += 1;
+        return 'unreachable';
+      },
+    }),
+  );
+  await assert.rejects(
+    () => generateText({ model, prompt: 'prompt', tools: { invalidTool: guardedTool } }),
+    (error: unknown) => {
+      assert.ok(error instanceof DenyDecoyLeakError);
+      assert.ok(!String(error).includes(decoy));
+      assert.ok(!JSON.stringify(error).includes(decoy));
+      return true;
+    },
+  );
+  assert.equal(executions, 0);
 });
 
 test('language-model middleware catches a decoy in structured object output', async () => {

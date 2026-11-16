@@ -225,6 +225,11 @@ export function decoyWatchLanguageModelMiddleware(
 /**
  * Wrap an AI SDK tool so validated input is checked before execution.
  *
+ * The AI SDK validates tool input before calling `execute`, so this wrapper
+ * cannot inspect input that fails validation. Use
+ * `decoyWatchLanguageModelMiddleware` as well: its `wrapGenerate` path checks
+ * raw tool-call input in `result.content` before the SDK parses it.
+ *
  * Tool metadata and hooks are preserved. Tools without `execute` are returned
  * unchanged; a blocking hit rejects before the inner `execute` function runs.
  */
