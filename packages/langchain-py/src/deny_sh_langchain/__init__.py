@@ -25,7 +25,9 @@ from .core import (
     is_narrowed,
 )
 from .decoy import (
+    DecoyEncoding,
     DecoyHit,
+    DecoySurface,
     DecoyWatch,
     DenyDecoyLeakError,
     create_decoy_watch,
@@ -42,6 +44,8 @@ __all__ = [
     "create_decoy_watch",
     "DecoyWatch",
     "DecoyHit",
+    "DecoySurface",
+    "DecoyEncoding",
     "DenyDecoyLeakError",
     "decoy_watch_output_runnable",
     "decoy_watch_tool",

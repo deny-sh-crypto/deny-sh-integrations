@@ -14,7 +14,7 @@ import threading
 import warnings
 from dataclasses import dataclass, fields, is_dataclass
 from typing import Any, Callable, Dict, List, Literal, Mapping, Optional, Sequence, Tuple
-from urllib import request
+from urllib import error as urlerror, request
 
 from .core import DenyToolError
 
@@ -295,8 +295,11 @@ def _default_transport(
     url: str, headers: Dict[str, str], body: bytes, timeout: float
 ) -> int:
     req = request.Request(url, data=body, headers=headers, method="POST")
-    with request.urlopen(req, timeout=timeout) as response:  # noqa: S310
-        return int(response.status)
+    try:
+        with request.urlopen(req, timeout=timeout) as response:  # noqa: S310
+            return int(response.status)
+    except urlerror.HTTPError as error:
+        return int(error.code)
 
 
 class DecoyWatch:
