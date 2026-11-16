@@ -28,6 +28,12 @@ from .core import (
     create_vault_resolver,
     is_narrowed,
 )
+from .decoy import (
+    DecoyHit,
+    DecoyWatch,
+    DenyDecoyLeakError,
+    create_decoy_watch,
+)
 from .tool import deny_vault_tool
 
 __all__ = [
@@ -36,6 +42,10 @@ __all__ = [
     "is_narrowed",
     "DenyToolError",
     "DenyLeakError",
+    "create_decoy_watch",
+    "DecoyWatch",
+    "DecoyHit",
+    "DenyDecoyLeakError",
 ]
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
