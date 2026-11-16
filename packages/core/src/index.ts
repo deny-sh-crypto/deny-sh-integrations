@@ -20,6 +20,7 @@
  */
 
 import { vaultGet as defaultVaultGet, vaultGetById as defaultVaultGetById } from 'deny-sh/client';
+import { createHash } from 'node:crypto';
 
 /** Options forwarded to the deny-sh vault client. */
 export interface DenyVaultClientOptions {
@@ -107,21 +108,24 @@ const DEFAULT_CLIENT: VaultClient = {
  * are coerced to string and checked (defends against a secret stuffed into a
  * number-like or custom toString). Map/Set are walked too.
  */
-function containsSecret(value: unknown, secret: string, seen: WeakSet<object>): boolean {
-  if (secret.length === 0) return false;
+function valueContains(
+  value: unknown,
+  matches: (text: string) => boolean,
+  seen: WeakSet<object>,
+): boolean {
   if (value == null) return false;
   const t = typeof value;
-  if (t === 'string') return (value as string).includes(secret);
+  if (t === 'string') return matches(value as string);
   if (t === 'number' || t === 'boolean' || t === 'bigint') {
-    return String(value).includes(secret);
+    return matches(String(value));
   }
   if (t === 'symbol') {
-    return (value as symbol).toString().includes(secret);
+    return matches((value as symbol).toString());
   }
   if (t === 'function') {
     // Defend against a secret captured in the source text of a returned fn.
     try {
-      return Function.prototype.toString.call(value).includes(secret);
+      return matches(Function.prototype.toString.call(value));
     } catch {
       return false;
     }
@@ -131,17 +135,17 @@ function containsSecret(value: unknown, secret: string, seen: WeakSet<object>): 
     if (seen.has(obj)) return false;
     seen.add(obj);
     if (Array.isArray(obj)) {
-      for (const el of obj) if (containsSecret(el, secret, seen)) return true;
+      for (const el of obj) if (valueContains(el, matches, seen)) return true;
       return false;
     }
     if (obj instanceof Map) {
       for (const [k, v] of obj) {
-        if (containsSecret(k, secret, seen) || containsSecret(v, secret, seen)) return true;
+        if (valueContains(k, matches, seen) || valueContains(v, matches, seen)) return true;
       }
       return false;
     }
     if (obj instanceof Set) {
-      for (const el of obj) if (containsSecret(el, secret, seen)) return true;
+      for (const el of obj) if (valueContains(el, matches, seen)) return true;
       return false;
     }
     // Binary carriers: a secret can cross the boundary as raw bytes in a
@@ -161,9 +165,9 @@ function containsSecret(value: unknown, secret: string, seen: WeakSet<object>): 
         // visible; utf8 catches a normally-encoded string buffer.
         let latin1 = '';
         for (let i = 0; i < bytes.length; i++) latin1 += String.fromCharCode(bytes[i]);
-        if (latin1.includes(secret)) return true;
+        if (matches(latin1)) return true;
         try {
-          if (new TextDecoder('utf-8').decode(bytes).includes(secret)) return true;
+          if (matches(new TextDecoder('utf-8').decode(bytes))) return true;
         } catch {
           /* ignore decode failure */
         }
@@ -176,7 +180,7 @@ function containsSecret(value: unknown, secret: string, seen: WeakSet<object>): 
     // plus getters, so a secret hidden behind a Symbol key, a non-enumerable
     // property, or a lazily-revealing getter cannot evade the sweep.
     for (const key of Reflect.ownKeys(obj)) {
-      if (typeof key === 'string' && key.includes(secret)) return true;
+      if (typeof key === 'string' && matches(key)) return true;
       let v: unknown;
       try {
         v = (obj as Record<string | symbol, unknown>)[key];
@@ -184,7 +188,7 @@ function containsSecret(value: unknown, secret: string, seen: WeakSet<object>): 
         // A throwing getter cannot hand the secret to the model, skip it.
         continue;
       }
-      if (containsSecret(v, secret, seen)) return true;
+      if (valueContains(v, matches, seen)) return true;
     }
     // Walk prototype-chain getters too (own-key walk above misses inherited
     // accessor properties that a serializer/framework could still read).
@@ -199,7 +203,7 @@ function containsSecret(value: unknown, secret: string, seen: WeakSet<object>): 
           } catch {
             continue;
           }
-          if (containsSecret(v, secret, seen)) return true;
+          if (valueContains(v, matches, seen)) return true;
         }
       }
       proto = Object.getPrototypeOf(proto);
@@ -207,13 +211,270 @@ function containsSecret(value: unknown, secret: string, seen: WeakSet<object>): 
     // Also sweep a custom toString, in case the DTO renders the secret lazily.
     try {
       const s = String(obj);
-      if (s !== '[object Object]' && s.includes(secret)) return true;
+      if (s !== '[object Object]' && matches(s)) return true;
     } catch {
       /* ignore */
     }
     return false;
   }
   return false;
+}
+
+function containsSecret(value: unknown, secret: string, seen: WeakSet<object>): boolean {
+  if (secret.length === 0) return false;
+  return valueContains(value, (text) => text.includes(secret), seen);
+}
+
+export type DecoySurface = 'model_output' | 'tool_args' | 'tool_result' | 'other';
+export type DecoyEncoding = 'plain' | 'base64' | 'base64url' | 'hex' | 'percent' | 'spaced';
+
+export interface DecoyHit {
+  label?: string;
+  fingerprint: string;
+  surface: DecoySurface;
+  encoding: DecoyEncoding;
+}
+
+export interface DecoyWatchConfig {
+  decoys: Array<string | { label?: string; value: string }>;
+  clientOptions?: DenyVaultClientOptions;
+  report?: boolean;
+  block?: boolean;
+  onLeak?: (hit: DecoyHit) => void | Promise<void>;
+  fetch?: typeof fetch;
+  reportTimeoutMs?: number;
+}
+
+export interface DecoyWatch {
+  scan(value: unknown, surface?: DecoySurface): DecoyHit[];
+  check(value: unknown, surface?: DecoySurface): Promise<DecoyHit[]>;
+  arm(): Promise<{ armed: number }>;
+  fingerprints(): string[];
+}
+
+/** Thrown after decoy callbacks and reports complete when blocking is enabled. */
+export class DenyDecoyLeakError extends Error {
+  readonly code = 'deny_decoy_leak';
+  constructor() {
+    super('A configured decoy was detected in agent-visible data.');
+    this.name = 'DenyDecoyLeakError';
+  }
+}
+
+interface NormalizedDecoy {
+  label?: string;
+  value: string;
+  fingerprint: string;
+  encodings: Array<{ encoding: Exclude<DecoyEncoding, 'spaced'>; variants: string[] }>;
+}
+
+const DEFAULT_API_BASE_URL = 'https://deny.sh/api';
+const DEFAULT_REPORT_TIMEOUT_MS = 3000;
+const DECOY_SOURCE = 'deny-sh-integrations-core/0.2.0';
+
+function decoyFingerprint(value: string): string {
+  return createHash('sha256').update(value, 'utf8').digest('hex');
+}
+
+function normalizeDecoy(entry: string | { label?: string; value: string }): NormalizedDecoy {
+  const value = typeof entry === 'string' ? entry : entry.value;
+  const label = typeof entry === 'string' ? undefined : entry.label;
+  if (typeof value !== 'string' || value.length < 8) {
+    throw new DenyToolError('deny_config_error', 'Every decoy value must be a string of at least 8 characters.');
+  }
+  const base64 = Buffer.from(value, 'utf8').toString('base64');
+  const base64urlPadded = base64.replace(/\+/g, '-').replace(/\//g, '_');
+  const percent = encodeURIComponent(value);
+  return {
+    label,
+    value,
+    fingerprint: decoyFingerprint(value),
+    encodings: [
+      { encoding: 'plain', variants: [value] },
+      { encoding: 'base64', variants: [...new Set([base64, base64.replace(/=+$/, '')])] },
+      {
+        encoding: 'base64url',
+        variants: [...new Set([base64urlPadded, base64urlPadded.replace(/=+$/, '')])],
+      },
+      { encoding: 'hex', variants: [Buffer.from(value, 'utf8').toString('hex')] },
+      ...(percent === value
+        ? []
+        : [{ encoding: 'percent' as const, variants: [percent] }]),
+    ],
+  };
+}
+
+function matchingEncoding(value: unknown, decoy: NormalizedDecoy): DecoyEncoding | undefined {
+  for (const candidate of decoy.encodings) {
+    const matched = valueContains(
+      value,
+      (text) =>
+        candidate.encoding === 'hex'
+          ? candidate.variants.some((variant) => text.toLowerCase().includes(variant))
+          : candidate.variants.some((variant) => text.includes(variant)),
+      new WeakSet(),
+    );
+    if (matched) return candidate.encoding;
+  }
+  if (
+    !/\s/.test(decoy.value) &&
+    valueContains(value, (text) => text.replace(/\s/g, '').includes(decoy.value), new WeakSet())
+  ) {
+    return 'spaced';
+  }
+  return undefined;
+}
+
+async function settleWithin<T>(promise: Promise<T>, timeoutMs: number): Promise<T | undefined> {
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<undefined>((resolve) => {
+        timeout = setTimeout(() => resolve(undefined), timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timeout) clearTimeout(timeout);
+  }
+}
+
+/**
+ * Build a decoy detector for values crossing an agent boundary.
+ *
+ * Detection only sees values passed to `scan` or `check`. It does not detect a
+ * decoy split across separate messages, embedded part-way inside a larger
+ * encoded blob, or otherwise transformed beyond the documented encodings.
+ */
+export function createDecoyWatch(config: DecoyWatchConfig): DecoyWatch {
+  if (!config || !Array.isArray(config.decoys)) {
+    throw new DenyToolError('deny_config_error', '`decoys` must be an array.');
+  }
+  const byFingerprint = new Map<string, NormalizedDecoy>();
+  for (const entry of config.decoys) {
+    const decoy = normalizeDecoy(entry);
+    if (!byFingerprint.has(decoy.fingerprint)) byFingerprint.set(decoy.fingerprint, decoy);
+  }
+  const decoys = [...byFingerprint.values()];
+  const clientOptions = config.clientOptions ?? {};
+  const apiKey = clientOptions.apiKey ?? process.env.DENY_API_KEY;
+  const baseUrl = (clientOptions.baseUrl ?? process.env.DENY_API_URL ?? DEFAULT_API_BASE_URL).replace(
+    /\/$/,
+    '',
+  );
+  const shouldReport = config.report ?? Boolean(apiKey);
+  const shouldBlock = config.block !== false;
+  const fetchImpl = config.fetch ?? globalThis.fetch;
+  const reportTimeoutMs = config.reportTimeoutMs ?? DEFAULT_REPORT_TIMEOUT_MS;
+  if (!Number.isFinite(reportTimeoutMs) || reportTimeoutMs <= 0) {
+    throw new DenyToolError('deny_config_error', '`reportTimeoutMs` must be a positive number.');
+  }
+
+  const scan = (value: unknown, surface: DecoySurface = 'other'): DecoyHit[] => {
+    const hits: DecoyHit[] = [];
+    for (const decoy of decoys) {
+      const encoding = matchingEncoding(value, decoy);
+      if (encoding) {
+        hits.push({
+          ...(decoy.label === undefined ? {} : { label: decoy.label }),
+          fingerprint: decoy.fingerprint,
+          surface,
+          encoding,
+        });
+      }
+    }
+    return hits;
+  };
+
+  const post = async (path: string, body: Record<string, unknown>): Promise<Response> => {
+    if (!apiKey) {
+      throw new DenyToolError('deny_config_error', 'An API key is required for decoy reporting or arming.');
+    }
+    if (!fetchImpl) {
+      throw new DenyToolError('deny_config_error', 'No fetch implementation is available.');
+    }
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), reportTimeoutMs);
+    timeout.unref?.();
+    const externalSignal = clientOptions.signal;
+    const abortFromExternal = () => controller.abort(externalSignal?.reason);
+    if (externalSignal?.aborted) abortFromExternal();
+    else externalSignal?.addEventListener('abort', abortFromExternal, { once: true });
+    try {
+      return await fetchImpl(`${baseUrl}${path}`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+          Accept: 'application/json',
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(body),
+        signal: controller.signal,
+      });
+    } finally {
+      clearTimeout(timeout);
+      externalSignal?.removeEventListener('abort', abortFromExternal);
+    }
+  };
+
+  const reportHit = async (hit: DecoyHit): Promise<void> => {
+    if (!shouldReport) return;
+    try {
+      await settleWithin(
+        post('/v1/decoy-tripwires/observe', {
+          tripwire_hash: hit.fingerprint,
+          surface: hit.surface,
+          source: DECOY_SOURCE,
+        }),
+        reportTimeoutMs,
+      );
+    } catch {
+      // Reporting must never disrupt the agent path.
+    }
+  };
+
+  return {
+    scan,
+    async check(value: unknown, surface: DecoySurface = 'other'): Promise<DecoyHit[]> {
+      const hits = scan(value, surface);
+      await Promise.all(
+        hits.map(async (hit) => {
+          const onLeak = async (): Promise<void> => {
+            try {
+              await config.onLeak?.(hit);
+            } catch {
+              // User callback failures must never disrupt the agent path.
+            }
+          };
+          await Promise.all([
+            settleWithin(onLeak(), reportTimeoutMs),
+            reportHit(hit),
+          ]);
+        }),
+      );
+      if (shouldBlock && hits.length > 0) throw new DenyDecoyLeakError();
+      return hits;
+    },
+    async arm(): Promise<{ armed: number }> {
+      for (const decoy of decoys) {
+        const response = await post('/v1/decoy-tripwires', {
+          tripwire_hash: decoy.fingerprint,
+          tripwire_kind: 'plaintext',
+          ...(decoy.label === undefined ? {} : { label: decoy.label }),
+        });
+        if (!response.ok) {
+          throw new DenyToolError(
+            'deny_http_error',
+            `deny.sh returned ${response.status} while arming a decoy tripwire.`,
+          );
+        }
+      }
+      return { armed: decoys.length };
+    },
+    fingerprints(): string[] {
+      return decoys.map((decoy) => decoy.fingerprint);
+    },
+  };
 }
 
 /** Scrub a string of every occurrence of the secret (for error messages). */

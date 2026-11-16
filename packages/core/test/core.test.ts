@@ -1,8 +1,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  createDecoyWatch,
   createVaultResolver,
   isNarrowed,
+  DenyDecoyLeakError,
   DenyToolError,
   DenyLeakError,
   type VaultClient,
@@ -269,4 +271,212 @@ test('leak sweep: still passes a genuinely narrowed DTO', async () => {
   });
   const out = await resolve({});
   assert.deepEqual(out, { ok: true, last4: '4242', charged: 1999 });
+});
+
+const DECOY = 'decoy-value-1234';
+
+test('decoy watch detects each supported encoding', () => {
+  const cases: Array<{ decoy: string; encoded: string; encoding: string }> = [
+    { decoy: DECOY, encoded: `prefix ${DECOY} suffix`, encoding: 'plain' },
+    {
+      decoy: DECOY,
+      encoded: Buffer.from(DECOY, 'utf8').toString('base64'),
+      encoding: 'base64',
+    },
+    {
+      decoy: DECOY,
+      encoded: Buffer.from(DECOY, 'utf8').toString('base64').replace(/=+$/, ''),
+      encoding: 'base64',
+    },
+    {
+      decoy: 'decoyÿÿvalue',
+      encoded: Buffer.from('decoyÿÿvalue', 'utf8').toString('base64url'),
+      encoding: 'base64url',
+    },
+    {
+      decoy: 'decoyÿÿvalue',
+      encoded: Buffer.from('decoyÿÿvalue', 'utf8')
+        .toString('base64')
+        .replace(/\+/g, '-')
+        .replace(/\//g, '_'),
+      encoding: 'base64url',
+    },
+    {
+      decoy: DECOY,
+      encoded: Buffer.from(DECOY, 'utf8').toString('hex').toUpperCase(),
+      encoding: 'hex',
+    },
+    {
+      decoy: 'decoy value?',
+      encoded: encodeURIComponent('decoy value?'),
+      encoding: 'percent',
+    },
+    {
+      decoy: DECOY,
+      encoded: [...DECOY].join(' \n'),
+      encoding: 'spaced',
+    },
+  ];
+  for (const item of cases) {
+    const watch = createDecoyWatch({ decoys: [item.decoy], report: false });
+    assert.equal(watch.scan(item.encoded, 'model_output')[0]?.encoding, item.encoding);
+  }
+});
+
+test('decoy watch ignores unrelated text', () => {
+  const watch = createDecoyWatch({ decoys: [DECOY], report: false });
+  assert.deepEqual(watch.scan('ordinary agent output', 'model_output'), []);
+});
+
+test('decoy watch traverses objects, arrays, Map, and Set', () => {
+  const decoys = ['object-decoy-1', 'array-decoy-22', 'map-decoy-333', 'set-decoy-444'];
+  const watch = createDecoyWatch({ decoys, report: false });
+  const value = {
+    nested: { value: decoys[0] },
+    array: ['safe', decoys[1]],
+    map: new Map([['key', decoys[2]]]),
+    set: new Set(['safe', decoys[3]]),
+  };
+  assert.equal(watch.scan(value, 'other').length, 4);
+});
+
+test('decoy watch rejects short decoys with deny_config_error', () => {
+  assert.throws(
+    () => createDecoyWatch({ decoys: ['short'] }),
+    (error: unknown) => error instanceof DenyToolError && error.code === 'deny_config_error',
+  );
+});
+
+test('decoy report carries only fingerprint, surface, and source', async () => {
+  const calls: Array<{ url: string; init?: RequestInit }> = [];
+  const fakeFetch: typeof fetch = async (input, init) => {
+    calls.push({ url: String(input), init });
+    return new Response(JSON.stringify({ ok: true, matched: true }), { status: 200 });
+  };
+  const watch = createDecoyWatch({
+    decoys: [{ label: 'demo', value: DECOY }],
+    clientOptions: { apiKey: 'test-key', baseUrl: 'https://example.invalid/api/' },
+    fetch: fakeFetch,
+    block: false,
+  });
+  const hits = await watch.check(`out: ${DECOY}`, 'model_output');
+  assert.equal(hits.length, 1);
+  assert.equal(calls[0]?.url, 'https://example.invalid/api/v1/decoy-tripwires/observe');
+  const bodyText = String(calls[0]?.init?.body);
+  const body = JSON.parse(bodyText) as Record<string, unknown>;
+  assert.deepEqual(body, {
+    tripwire_hash: watch.fingerprints()[0],
+    surface: 'model_output',
+    source: 'deny-sh-integrations-core/0.2.0',
+  });
+  assert.ok(!bodyText.includes(DECOY));
+  assert.equal((calls[0]?.init?.headers as Record<string, string>).Authorization, 'Bearer test-key');
+});
+
+test('decoy report network failure is swallowed', async () => {
+  const watch = createDecoyWatch({
+    decoys: [DECOY],
+    clientOptions: { apiKey: 'test-key' },
+    fetch: async () => {
+      throw new Error('offline');
+    },
+    block: false,
+  });
+  const hits = await watch.check(DECOY, 'model_output');
+  assert.equal(hits.length, 1);
+});
+
+test('decoy report is bounded when injected fetch ignores abort', async () => {
+  const watch = createDecoyWatch({
+    decoys: [DECOY],
+    clientOptions: { apiKey: 'test-key' },
+    fetch: async () => new Promise<Response>(() => {}),
+    reportTimeoutMs: 10,
+    block: false,
+  });
+  const completed = await Promise.race([
+    watch.check(DECOY).then(() => true),
+    new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 250)),
+  ]);
+  assert.equal(completed, true);
+});
+
+test('block true throws scrubbed DenyDecoyLeakError after callback', async () => {
+  let callbackCount = 0;
+  const watch = createDecoyWatch({
+    decoys: [DECOY],
+    report: false,
+    onLeak: () => {
+      callbackCount += 1;
+    },
+  });
+  await assert.rejects(() => watch.check(DECOY, 'tool_result'), (error: unknown) => {
+    assert.ok(error instanceof DenyDecoyLeakError);
+    assert.ok(!error.message.includes(DECOY));
+    return true;
+  });
+  assert.equal(callbackCount, 1);
+});
+
+test('block false returns hits and onLeak runs once per hit', async () => {
+  const seen: string[] = [];
+  const watch = createDecoyWatch({
+    decoys: [DECOY, 'second-decoy-5678'],
+    report: false,
+    block: false,
+    onLeak: (hit) => {
+      seen.push(hit.fingerprint);
+    },
+  });
+  const hits = await watch.check(`${DECOY} second-decoy-5678`, 'tool_args');
+  assert.equal(hits.length, 2);
+  assert.deepEqual(seen.sort(), hits.map((hit) => hit.fingerprint).sort());
+});
+
+test('arm posts each fingerprint as plaintext tripwire', async () => {
+  const bodies: Array<Record<string, unknown>> = [];
+  const fakeFetch: typeof fetch = async (_input, init) => {
+    bodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+    return new Response(JSON.stringify({ ok: true }), { status: 200 });
+  };
+  const watch = createDecoyWatch({
+    decoys: [{ label: 'first', value: DECOY }, 'second-decoy-5678'],
+    clientOptions: { apiKey: 'test-key', baseUrl: 'https://example.invalid/api' },
+    fetch: fakeFetch,
+    report: false,
+  });
+  assert.deepEqual(await watch.arm(), { armed: 2 });
+  assert.deepEqual(
+    bodies.map((body) => body.tripwire_kind),
+    ['plaintext', 'plaintext'],
+  );
+  assert.deepEqual(
+    bodies.map((body) => body.tripwire_hash),
+    watch.fingerprints(),
+  );
+  assert.equal(bodies[0]?.label, 'first');
+});
+
+test('report false and unresolved API key make check network-free', async () => {
+  let calls = 0;
+  const fakeFetch: typeof fetch = async () => {
+    calls += 1;
+    return new Response('{}', { status: 200 });
+  };
+  const explicitOff = createDecoyWatch({
+    decoys: [DECOY],
+    clientOptions: { apiKey: 'test-key' },
+    fetch: fakeFetch,
+    report: false,
+    block: false,
+  });
+  const noKey = createDecoyWatch({
+    decoys: [DECOY],
+    clientOptions: { apiKey: '' },
+    fetch: fakeFetch,
+    block: false,
+  });
+  await explicitOff.check(DECOY);
+  await noKey.check(DECOY);
+  assert.equal(calls, 0);
 });
