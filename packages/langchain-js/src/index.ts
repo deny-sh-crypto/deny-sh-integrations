@@ -27,7 +27,7 @@
  *   const agent = createAgent({ model, tools: [invoiceTool] });
  */
 
-import { DynamicStructuredTool, tool } from '@langchain/core/tools';
+import { tool } from '@langchain/core/tools';
 import type { StructuredToolInterface } from '@langchain/core/tools';
 import { RunnableLambda } from '@langchain/core/runnables';
 import {
@@ -124,26 +124,53 @@ export function decoyWatchOutputRunnable<TOutput = unknown>(
 }
 
 /**
- * Wrap a structured tool so validated arguments are checked before execution.
+ * Wrap a structured tool so raw arguments are checked before validation and
+ * execution.
  *
- * The wrapper preserves the inner tool's name, description, schema, and
- * `returnDirect` value. A blocking hit rejects before `inner.invoke` runs.
+ * The proxy delegates through the inner tool's normal entry point, preserving
+ * its schema, configuration, callbacks, metadata, and ToolCall behaviour. A
+ * blocking hit rejects before the inner tool validates or executes.
  */
 export function decoyWatchToolInput(
   watch: DecoyWatch,
   inner: StructuredToolInterface,
 ): StructuredToolInterface {
-  const wrapped = new DynamicStructuredTool({
-    name: inner.name,
-    description: inner.description,
-    schema: inner.schema,
-    returnDirect: inner.returnDirect,
-    func: async (args: unknown, _runManager, config) => {
-      await watch.check(args, 'tool_args');
-      return inner.invoke(args as never, config);
+  type ToolWithCall = StructuredToolInterface & {
+    call?: (input: unknown, config?: unknown, tags?: string[]) => Promise<unknown>;
+  };
+
+  const target = inner as ToolWithCall;
+  const inputToScan = (input: unknown): unknown => {
+    if (
+      input !== null
+      && typeof input === 'object'
+      && 'args' in input
+      && 'name' in input
+      && 'id' in input
+      && 'type' in input
+    ) {
+      return (input as { args: unknown }).args;
+    }
+    return input;
+  };
+
+  return new Proxy(target, {
+    get(proxyTarget, property, receiver) {
+      if (property === 'invoke') {
+        return async (input: unknown, config?: unknown) => {
+          await watch.check(inputToScan(input), 'tool_args');
+          return Reflect.apply(proxyTarget.invoke, proxyTarget, [input, config]);
+        };
+      }
+      if (property === 'call' && typeof proxyTarget.call === 'function') {
+        return async (input: unknown, config?: unknown, tags?: string[]) => {
+          await watch.check(inputToScan(input), 'tool_args');
+          return Reflect.apply(proxyTarget.call!, proxyTarget, [input, config, tags]);
+        };
+      }
+      return Reflect.get(proxyTarget, property, receiver);
     },
-  });
-  return wrapped as unknown as StructuredToolInterface;
+  }) as StructuredToolInterface;
 }
 
 export {

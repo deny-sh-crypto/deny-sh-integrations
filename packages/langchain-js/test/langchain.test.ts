@@ -2,12 +2,14 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { RunnableLambda } from '@langchain/core/runnables';
 import { tool } from '@langchain/core/tools';
+import { ToolMessage } from '@langchain/core/messages';
 import { z } from 'zod';
 import {
   createDecoyWatch,
   decoyWatchOutputRunnable,
   decoyWatchToolInput,
   denyVaultTool,
+  DenyDecoyLeakError,
   DenyLeakError,
   type DecoyHit,
   type VaultClient,
@@ -203,4 +205,135 @@ test('tool-input wrapper executes a clean call exactly once', async () => {
   );
   assert.equal(await guarded.invoke({ value: 'clean' }), 'ok:clean');
   assert.equal(executions, 1);
+});
+
+test('tool-input wrapper blocks a decoy in ToolCall args before execution', async () => {
+  const decoy = 'decoy-langchain-toolcall-1234';
+  let executions = 0;
+  const inner = tool(async () => {
+    executions += 1;
+    return 'unreachable';
+  }, {
+    name: 'toolcall_input',
+    description: 'ToolCall input',
+    schema: z.object({ token: z.string() }),
+  });
+  const guarded = decoyWatchToolInput(
+    createDecoyWatch({ decoys: [decoy], report: false }),
+    inner,
+  );
+  await assert.rejects(
+    () => guarded.invoke({ name: 'toolcall_input', args: { token: decoy }, id: 'call_1', type: 'tool_call' }),
+    DenyDecoyLeakError,
+  );
+  assert.equal(executions, 0);
+});
+
+test('tool-input wrapper scans malformed raw input before schema parsing', async () => {
+  const decoy = 'decoy-langchain-malformed-1234';
+  let executions = 0;
+  const inner = tool(async () => {
+    executions += 1;
+    return 'unreachable';
+  }, {
+    name: 'malformed_input',
+    description: 'Malformed input',
+    schema: z.object({ token: z.number() }),
+  });
+  const guarded = decoyWatchToolInput(
+    createDecoyWatch({ decoys: [decoy], report: false }),
+    inner,
+  );
+  await assert.rejects(
+    () => guarded.invoke({ token: decoy }),
+    (error: unknown) => {
+      assert.ok(error instanceof DenyDecoyLeakError);
+      assert.ok(!String(error).includes(decoy));
+      assert.ok(!JSON.stringify(error).includes(decoy));
+      return true;
+    },
+  );
+  assert.equal(executions, 0);
+});
+
+test('tool-input wrapper validates and transforms schema exactly once', async () => {
+  let transforms = 0;
+  const inner = tool(async ({ value }: { value: string }) => value, {
+    name: 'single_transform',
+    description: 'Single transform',
+    schema: z.object({ value: z.string().transform((value) => {
+      transforms += 1;
+      return value.toUpperCase();
+    }) }),
+  });
+  const guarded = decoyWatchToolInput(
+    createDecoyWatch({ decoys: ['decoy-langchain-transform-1234'], report: false }),
+    inner,
+  );
+  assert.equal(await guarded.invoke({ value: 'clean' }), 'CLEAN');
+  assert.equal(transforms, 1);
+});
+
+test('tool-input wrapper preserves inner tool fields', () => {
+  const inner = tool(async () => ['content', { detail: true }], {
+    name: 'preserved_fields',
+    description: 'Preserved fields',
+    schema: z.object({ value: z.string() }),
+    responseFormat: 'content_and_artifact',
+    returnDirect: true,
+    tags: ['inner-tag'],
+    metadata: { source: 'inner' },
+  });
+  const guarded = decoyWatchToolInput(
+    createDecoyWatch({ decoys: ['decoy-langchain-fields-1234'], report: false }),
+    inner,
+  );
+  const guardedFields = guarded as typeof inner;
+  assert.equal(guarded.name, inner.name);
+  assert.equal(guarded.description, inner.description);
+  assert.equal(guarded.schema, inner.schema);
+  assert.equal(guardedFields.responseFormat, inner.responseFormat);
+  assert.equal(guarded.returnDirect, inner.returnDirect);
+  assert.equal(guardedFields.tags, inner.tags);
+  assert.equal(guardedFields.metadata, inner.metadata);
+});
+
+test('tool-input wrapper preserves ToolMessage artifact output', async () => {
+  const artifact = { detail: true };
+  const inner = tool(async () => ['content', artifact], {
+    name: 'artifact_tool',
+    description: 'Artifact tool',
+    schema: z.object({ value: z.string() }),
+    responseFormat: 'content_and_artifact',
+  });
+  const guarded = decoyWatchToolInput(
+    createDecoyWatch({ decoys: ['decoy-langchain-artifact-1234'], report: false }),
+    inner,
+  );
+  const result = await guarded.invoke({
+    name: 'artifact_tool', args: { value: 'clean' }, id: 'call_artifact', type: 'tool_call',
+  });
+  assert.ok(result instanceof ToolMessage);
+  assert.equal(result.tool_call_id, 'call_artifact');
+  assert.deepEqual(result.artifact, artifact);
+});
+
+test('tool-input wrapper block:false executes and reports one hit', async () => {
+  const decoy = 'decoy-langchain-tool-observe-1234';
+  const hits: DecoyHit[] = [];
+  let executions = 0;
+  const inner = tool(async ({ value }: { value: string }) => {
+    executions += 1;
+    return value;
+  }, {
+    name: 'observed_tool_input', description: 'Observed tool input',
+    schema: z.object({ value: z.string() }),
+  });
+  const guarded = decoyWatchToolInput(createDecoyWatch({
+    decoys: [decoy], report: false, block: false, onLeak: (hit) => { hits.push(hit); },
+  }), inner);
+  assert.equal(await guarded.invoke({ value: decoy }), decoy);
+  assert.equal(executions, 1);
+  assert.equal(hits.length, 1);
+  assert.equal(hits[0]?.surface, 'tool_args');
 });
