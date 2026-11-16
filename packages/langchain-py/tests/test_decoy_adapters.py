@@ -10,6 +10,7 @@ from pydantic import BaseModel, field_validator
 
 from deny_sh_langchain import (
     DenyDecoyLeakError,
+    DenyToolError,
     create_decoy_watch,
     decoy_watch_output_runnable,
     decoy_watch_tool,
@@ -58,6 +59,26 @@ def test_decoy_tool_arguments_stop_before_tool_execution():
         wrapped.invoke({"value": DECOY})
     assert counter["calls"] == 0
     assert DECOY not in str(error.value)
+
+
+def test_scan_limit_stops_before_tool_execution():
+    watch = create_decoy_watch([DECOY], report=False)
+    counter = {"calls": 0}
+
+    @tool
+    def echo(value: object) -> str:
+        """Echo a value."""
+        counter["calls"] += 1
+        return str(value)
+
+    value = DECOY
+    for _ in range(200):
+        value = [value]
+    wrapped = decoy_watch_tool(echo, watch)
+    with pytest.raises(DenyToolError) as error:
+        wrapped.invoke({"value": value})
+    assert error.value.code == "deny_scan_limit"
+    assert counter["calls"] == 0
 
 
 def test_clean_tool_arguments_execute_once():

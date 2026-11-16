@@ -131,12 +131,13 @@ def _append_text(raws: List[str], value: str, collected: int) -> Tuple[int, bool
     return _MAX_SCAN_TEXT_BYTES, True
 
 
-def _collect_raw_texts(value: Any) -> List[str]:
+def _collect_raw_texts(value: Any) -> Tuple[List[str], bool]:
     raws: List[str] = []
     seen: set[int] = set()
     stack: List[Tuple[Any, int]] = [(value, 0)]
     visited = 0
     collected = 0
+    incomplete = False
 
     def append(text: str) -> bool:
         nonlocal collected
@@ -151,16 +152,19 @@ def _collect_raw_texts(value: Any) -> List[str]:
 
     while stack:
         if visited >= _MAX_SCAN_NODES:
+            incomplete = True
             break
         item, depth = stack.pop()
         visited += 1
         if depth > _MAX_SCAN_DEPTH:
-            break
+            incomplete = True
+            continue
         try:
             if item is None:
                 continue
             if isinstance(item, str):
                 if append(item):
+                    incomplete = True
                     break
                 continue
             if isinstance(item, (bytes, bytearray, memoryview)):
@@ -168,9 +172,11 @@ def _collect_raw_texts(value: Any) -> List[str]:
                     data = bytes(item)
                     latin1 = data.decode("latin-1")
                     if append(latin1):
+                        incomplete = True
                         break
                     utf8 = data.decode("utf-8", "replace")
                     if utf8 != latin1 and append(utf8):
+                        incomplete = True
                         break
                 except Exception:
                     continue
@@ -181,6 +187,7 @@ def _collect_raw_texts(value: Any) -> List[str]:
                 except Exception:
                     continue
                 if append(rendered):
+                    incomplete = True
                     break
                 continue
             try:
@@ -196,6 +203,7 @@ def _collect_raw_texts(value: Any) -> List[str]:
                     except Exception:
                         continue
                 if append(rendered):
+                    incomplete = True
                     break
                 continue
 
@@ -217,7 +225,7 @@ def _collect_raw_texts(value: Any) -> List[str]:
                     except Exception:
                         break
                     if push(key, depth) or push(nested, depth):
-                        return raws
+                        return raws, True
                 continue
             if isinstance(item, (list, tuple, set, frozenset)):
                 try:
@@ -232,7 +240,7 @@ def _collect_raw_texts(value: Any) -> List[str]:
                     except Exception:
                         break
                     if push(nested, depth):
-                        return raws
+                        return raws, True
                 continue
 
             visited_names: set[str] = set()
@@ -259,7 +267,7 @@ def _collect_raw_texts(value: Any) -> List[str]:
                     except Exception:
                         continue
                     if push(nested, depth):
-                        return raws
+                        return raws, True
 
             try:
                 instance_values = getattr(item, "__dict__", None)
@@ -280,7 +288,7 @@ def _collect_raw_texts(value: Any) -> List[str]:
                     if isinstance(name, str):
                         visited_names.add(name)
                     if push(name, depth) or push(nested, depth):
-                        return raws
+                        return raws, True
 
             try:
                 class_iterator = iter(type(item).__mro__)
@@ -312,7 +320,7 @@ def _collect_raw_texts(value: Any) -> List[str]:
                         except Exception:
                             continue
                         if push(nested, depth):
-                            return raws
+                            return raws, True
                 try:
                     property_iterator = iter(class_vars.items())
                 except Exception:
@@ -334,17 +342,18 @@ def _collect_raw_texts(value: Any) -> List[str]:
                     except Exception:
                         continue
                     if push(nested, depth):
-                        return raws
+                        return raws, True
             try:
                 rendered = str(item)
             except Exception:
                 continue
             if not (rendered.startswith("<") and rendered.endswith(">")):
                 if append(rendered):
+                    incomplete = True
                     break
         except Exception:
             continue
-    return raws
+    return raws, incomplete
 
 
 _PERCENT_RUN = re.compile(r"(?:%[0-9a-fA-F]{2})+")
@@ -360,9 +369,10 @@ def _percent_decode(text: str) -> str:
     return _PERCENT_RUN.sub(decode, text)
 
 
-def _collect_scan_texts(value: Any) -> List[_ScanText]:
+def _collect_scan_texts(value: Any) -> Tuple[List[_ScanText], bool]:
     texts: List[_ScanText] = []
-    for raw in _collect_raw_texts(value):
+    raws, incomplete = _collect_raw_texts(value)
+    for raw in raws:
         try:
             decoded = _percent_decode(raw)
             form = decoded.replace("+", " ") if "+" in decoded else decoded
@@ -379,7 +389,7 @@ def _collect_scan_texts(value: Any) -> List[_ScanText]:
             )
         except Exception:
             continue
-    return texts
+    return texts, incomplete
 
 
 def _matching_encoding(
@@ -484,10 +494,17 @@ class DecoyWatch:
         self._transport = transport
 
     def scan(self, value: Any, surface: DecoySurface = "other") -> List[DecoyHit]:
+        hits, _incomplete = self._scan(value, surface)
+        return hits
+
+    def _scan(
+        self, value: Any, surface: DecoySurface
+    ) -> Tuple[List[DecoyHit], bool]:
         try:
-            texts = _collect_scan_texts(value)
+            texts, incomplete = _collect_scan_texts(value)
         except Exception:
             texts = []
+            incomplete = True
         hits: List[DecoyHit] = []
         for decoy in self._decoys:
             try:
@@ -503,7 +520,7 @@ class DecoyWatch:
                         label=decoy.label,
                     )
                 )
-        return hits
+        return hits, incomplete
 
     def _notify_report_error(self, info: Dict[str, Any]) -> None:
         if self._on_report_error is None:
@@ -594,7 +611,7 @@ class DecoyWatch:
             )
 
     def check(self, value: Any, surface: DecoySurface = "other") -> List[DecoyHit]:
-        hits = self.scan(value, surface)
+        hits, incomplete = self._scan(value, surface)
         deadline = time.monotonic() + self._report_timeout
         executor = concurrent.futures.ThreadPoolExecutor(max_workers=8)
         futures: List[concurrent.futures.Future[Any]] = []
@@ -623,6 +640,15 @@ class DecoyWatch:
             executor.shutdown(wait=False, cancel_futures=True)
         if self._block and hits:
             raise DenyDecoyLeakError(hits)
+        if incomplete and not hits:
+            if self._block:
+                raise DenyToolError(
+                    "deny_scan_limit",
+                    "Value exceeds decoy scan limits and could not be checked.",
+                )
+            self._notify_report_error({"error": "scan_limit", "surface": surface})
+        elif incomplete and not self._block:
+            self._notify_report_error({"error": "scan_limit", "surface": surface})
         return hits
 
     async def acheck(
@@ -671,6 +697,10 @@ def create_decoy_watch(
     report_timeout: float = _DEFAULT_REPORT_TIMEOUT,
     transport: Optional[Callable[[str, Dict[str, str], bytes, float], Any]] = None,
 ) -> DecoyWatch:
+    """Create a watch limited to depth 64, 100,000 nodes, and 8 MiB of text.
+
+    Blocking watches fail closed when a limit prevents a complete clean scan.
+    """
     if not isinstance(decoys, (list, tuple)):
         raise DenyToolError("deny_config_error", "`decoys` must be an array.")
     if not isinstance(report_timeout, (int, float)) or not report_timeout > 0:

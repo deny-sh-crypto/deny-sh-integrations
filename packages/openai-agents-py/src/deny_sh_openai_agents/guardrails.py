@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from .core import DenyToolError
 from .decoy import DecoyWatch, DenyDecoyLeakError
 
 
@@ -26,6 +27,11 @@ def decoy_watch_output_guardrail(watch: DecoyWatch):
                 output_info={"hits": error.hits},
                 tripwire_triggered=True,
             )
+        except DenyToolError:
+            return GuardrailFunctionOutput(
+                output_info={"hits": [], "scan_limit": True},
+                tripwire_triggered=True,
+            )
 
     return guardrail
 
@@ -43,6 +49,10 @@ def decoy_watch_tool_input_guardrail(watch: DecoyWatch):
         except DenyDecoyLeakError as error:
             return ToolGuardrailFunctionOutput.raise_exception(
                 {"hits": error.hits}
+            )
+        except DenyToolError:
+            return ToolGuardrailFunctionOutput.raise_exception(
+                {"hits": [], "scan_limit": True}
             )
 
     return guardrail

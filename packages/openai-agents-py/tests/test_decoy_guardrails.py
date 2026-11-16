@@ -70,6 +70,30 @@ def test_decoy_tool_arguments_stop_before_tool_execution():
     model.assert_complete()
 
 
+def test_scan_limit_triggers_tool_guardrail(monkeypatch):
+    watch = create_decoy_watch([DECOY], report=False)
+    monkeypatch.setattr(watch, "_scan", lambda _value, _surface: ([], True))
+    counter = {"calls": 0}
+
+    @function_tool(
+        tool_input_guardrails=[decoy_watch_tool_input_guardrail(watch)]
+    )
+    def echo(value: str) -> str:
+        """Echo a value."""
+        counter["calls"] += 1
+        return value
+
+    model = ScriptedModel(
+        [[function_call("echo", {"value": "clean"}, call_id="call-limit")]]
+    )
+    agent = Agent(name="test", model=model, tools=[echo])
+    with pytest.raises(ToolInputGuardrailTripwireTriggered) as error:
+        asyncio.run(Runner.run(agent, "go"))
+    assert error.value.output.output_info == {"hits": [], "scan_limit": True}
+    assert counter["calls"] == 0
+    model.assert_complete()
+
+
 def test_clean_tool_arguments_execute_once():
     watch = create_decoy_watch([DECOY], report=False)
     counter = {"calls": 0}

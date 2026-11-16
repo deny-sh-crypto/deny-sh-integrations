@@ -115,6 +115,46 @@ def test_scanner_depth_limit_prevents_recursion_error():
     assert watch.scan(value) == []
 
 
+def test_scanner_keeps_scanning_siblings_after_depth_limit():
+    over_deep = "clean"
+    for _ in range(200):
+        over_deep = [over_deep]
+    watch = create_decoy_watch([DECOY], report=False, block=False)
+    cases = [
+        {"body": DECOY, "z": over_deep},
+        {"z": over_deep, "body": DECOY},
+        [DECOY, over_deep],
+        [over_deep, DECOY],
+    ]
+    for value in cases:
+        assert len(watch.scan(value)) == 1
+
+
+def test_incomplete_scan_fails_closed_or_reports_when_nonblocking():
+    value = DECOY
+    for _ in range(10_000):
+        value = [value]
+
+    blocking = create_decoy_watch([DECOY], report=False)
+    assert blocking.scan(value) == []
+    with pytest.raises(DenyToolError) as error:
+        blocking.check(value, "tool_args")
+    assert error.value.code == "deny_scan_limit"
+    assert DECOY not in str(error.value)
+
+    failures = []
+    nonblocking = create_decoy_watch(
+        [DECOY], report=False, block=False, on_report_error=failures.append
+    )
+    assert nonblocking.check(value, "tool_args") == []
+    assert failures == [{"error": "scan_limit", "surface": "tool_args"}]
+
+
+def test_clean_value_is_not_an_incomplete_scan():
+    watch = create_decoy_watch([DECOY], report=False)
+    assert watch.check({"value": "clean"}) == []
+
+
 def test_scanner_cyclic_structure_terminates():
     value = []
     value.append(value)
