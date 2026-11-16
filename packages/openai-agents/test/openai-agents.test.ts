@@ -1,7 +1,15 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { z } from 'zod';
-import { denyVaultTool, DenyLeakError, DenyToolError, type VaultClient } from '../src/index.js';
+import {
+  createDecoyWatch,
+  decoyWatchOutputGuardrail,
+  decoyWatchToolInputGuardrail,
+  denyVaultTool,
+  DenyLeakError,
+  DenyToolError,
+  type VaultClient,
+} from '../src/index.js';
 
 const FAKE_SECRET = 'sk_test_DENYFAKE_0000_not_a_real_key';
 
@@ -164,4 +172,42 @@ test('clientOptions (per-tenant apiKey) are forwarded to the client', async () =
     password: 'tenant_pw',
     opts: { apiKey: 'cs_tenant_42' },
   });
+});
+
+test('decoy output guardrail trips on a decoy in final output', async () => {
+  const watch = createDecoyWatch({ decoys: ['decoy-output-1234'], report: false });
+  const guardrail = decoyWatchOutputGuardrail(watch);
+  const result = await guardrail.guardrailFunction({
+    agent: {} as never,
+    agentOutput: 'contains decoy-output-1234',
+    context: {} as never,
+  });
+  assert.equal(result.tripwireTriggered, true);
+});
+
+test('decoy output guardrail passes clean final output', async () => {
+  const watch = createDecoyWatch({ decoys: ['decoy-output-1234'], report: false });
+  const guardrail = decoyWatchOutputGuardrail(watch);
+  const result = await guardrail.guardrailFunction({
+    agent: {} as never,
+    agentOutput: 'clean final output',
+    context: {} as never,
+  });
+  assert.equal(result.tripwireTriggered, false);
+});
+
+test('tool-input guardrail trips on decoy in raw function-call arguments', async () => {
+  const watch = createDecoyWatch({ decoys: ['decoy-tool-args-1234'], report: false });
+  const guardrail = decoyWatchToolInputGuardrail(watch);
+  const result = await guardrail.run({
+    agent: {} as never,
+    context: {} as never,
+    toolCall: {
+      type: 'function_call',
+      callId: 'call_1',
+      name: 'demo_tool',
+      arguments: JSON.stringify({ token: 'decoy-tool-args-1234' }),
+    },
+  });
+  assert.equal(result.behavior.type, 'throwException');
 });

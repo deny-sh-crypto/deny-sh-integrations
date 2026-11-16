@@ -34,9 +34,16 @@
  *   const result = await run(agent, 'Look up invoice in_1');
  */
 
-import { tool } from '@openai/agents';
+import {
+  defineOutputGuardrail,
+  defineToolInputGuardrail,
+  ToolGuardrailFunctionOutputFactory,
+  tool,
+} from '@openai/agents';
 import {
   createVaultResolver,
+  DenyDecoyLeakError,
+  type DecoyWatch,
   type DenyVaultClientOptions,
   type VaultClient,
 } from 'deny-sh-integrations-core';
@@ -114,5 +121,73 @@ export function denyVaultTool<TArgs = Record<string, unknown>, TResult = unknown
   } as any);
 }
 
-export { createVaultResolver, DenyToolError, DenyLeakError, isNarrowed } from 'deny-sh-integrations-core';
-export type { DenyVaultClientOptions, VaultClient } from 'deny-sh-integrations-core';
+/**
+ * Create an Agents SDK output guardrail for final agent output.
+ *
+ * Pass the result in `new Agent({ outputGuardrails: [...] })`. Detection only
+ * sees the final output value supplied by the SDK; it cannot join a decoy split
+ * across messages or detect transformations unsupported by the core watch.
+ */
+export function decoyWatchOutputGuardrail(watch: DecoyWatch) {
+  return defineOutputGuardrail({
+    name: 'deny_decoy_watch_output',
+    execute: async ({ agentOutput }) => {
+      try {
+        const hits = await watch.check(agentOutput, 'model_output');
+        return { tripwireTriggered: false, outputInfo: { hits } };
+      } catch (error) {
+        if (error instanceof DenyDecoyLeakError) {
+          return {
+            tripwireTriggered: true,
+            outputInfo: { hits: watch.scan(agentOutput, 'model_output') },
+          };
+        }
+        throw error;
+      }
+    },
+  });
+}
+
+/**
+ * Create an Agents SDK tool-input guardrail for raw function-call arguments.
+ *
+ * Pass the result as `inputGuardrails: [decoyWatchToolInputGuardrail(watch)]`
+ * when constructing a function tool. The installed SDK invokes this guardrail
+ * with `toolCall.arguments` before parsing and executing the function tool.
+ */
+export function decoyWatchToolInputGuardrail(watch: DecoyWatch) {
+  return defineToolInputGuardrail({
+    name: 'deny_decoy_watch_tool_args',
+    run: async ({ toolCall }) => {
+      try {
+        const hits = await watch.check(toolCall.arguments, 'tool_args');
+        return ToolGuardrailFunctionOutputFactory.allow({ hits });
+      } catch (error) {
+        if (error instanceof DenyDecoyLeakError) {
+          return ToolGuardrailFunctionOutputFactory.throwException({
+            hits: watch.scan(toolCall.arguments, 'tool_args'),
+          });
+        }
+        throw error;
+      }
+    },
+  });
+}
+
+export {
+  createDecoyWatch,
+  createVaultResolver,
+  DenyDecoyLeakError,
+  DenyToolError,
+  DenyLeakError,
+  isNarrowed,
+} from 'deny-sh-integrations-core';
+export type {
+  DecoyEncoding,
+  DecoyHit,
+  DecoySurface,
+  DecoyWatch,
+  DecoyWatchConfig,
+  DenyVaultClientOptions,
+  VaultClient,
+} from 'deny-sh-integrations-core';
