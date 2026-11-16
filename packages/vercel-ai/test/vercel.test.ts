@@ -3,6 +3,8 @@ import assert from 'node:assert/strict';
 import {
   generateText,
   Output,
+  simulateReadableStream,
+  streamText,
   tool,
   wrapLanguageModel,
 } from 'ai';
@@ -126,6 +128,45 @@ function scriptedModel(text: string): V2LanguageModel {
   };
 }
 
+function streamingModel(textDeltas: string[]): V2LanguageModel {
+  return {
+    specificationVersion: 'v2',
+    provider: 'deny-test',
+    modelId: 'streaming',
+    supportedUrls: {},
+    async doGenerate() {
+      throw new Error('generation is not used in these tests');
+    },
+    async doStream() {
+      return {
+        stream: simulateReadableStream({
+          chunks: [
+            { type: 'text-start' as const, id: 'text-1' },
+            ...textDeltas.map((delta) => ({
+              type: 'text-delta' as const,
+              id: 'text-1',
+              delta,
+            })),
+            { type: 'text-end' as const, id: 'text-1' },
+            {
+              type: 'finish' as const,
+              finishReason: 'stop' as const,
+              usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
+            },
+          ],
+        }),
+      };
+    },
+  };
+}
+
+async function consumeTextStream(model: V2LanguageModel): Promise<string> {
+  const result = streamText({ model, prompt: 'prompt' });
+  let text = '';
+  for await (const delta of result.textStream) text += delta;
+  return text;
+}
+
 test('language-model middleware stops generateText and keeps the error decoy-free', async () => {
   const decoy = 'decoy-vercel-output-1234';
   const model = wrapLanguageModel({
@@ -185,6 +226,80 @@ test('block:false returns output and reports the model-output hit through onLeak
   });
   const result = await generateText({ model, prompt: 'prompt' });
   assert.equal(result.text, `observed ${decoy}`);
+  assert.equal(hits.length, 1);
+  assert.equal(hits[0]?.surface, 'model_output');
+});
+
+test('stream middleware detects a decoy split across text deltas', async () => {
+  const decoy = 'decoy-vercel-stream-1234';
+  const hits: DecoyHit[] = [];
+  const model = wrapLanguageModel({
+    model: streamingModel(['contains decoy-vercel-', 'stream-1234']),
+    middleware: decoyWatchLanguageModelMiddleware(
+      createDecoyWatch({
+        decoys: [decoy],
+        report: false,
+        block: false,
+        onLeak: (hit) => {
+          hits.push(hit);
+        },
+      }),
+    ),
+  });
+  assert.equal(await consumeTextStream(model), `contains ${decoy}`);
+  assert.equal(hits.length, 1);
+  assert.equal(hits[0]?.surface, 'model_output');
+});
+
+test('blocking stream middleware rejects with a decoy-free error', async () => {
+  const decoy = 'decoy-vercel-stream-block-1234';
+  const model = wrapLanguageModel({
+    model: streamingModel(['contains decoy-vercel-', 'stream-block-1234']),
+    middleware: decoyWatchLanguageModelMiddleware(
+      createDecoyWatch({ decoys: [decoy], report: false }),
+    ),
+  });
+  await assert.rejects(
+    () => consumeTextStream(model),
+    (error: unknown) => !String(error).includes(decoy),
+  );
+});
+
+test('clean stream completes with identical text and no hit', async () => {
+  const hits: DecoyHit[] = [];
+  const model = wrapLanguageModel({
+    model: streamingModel(['clean ', 'stream output']),
+    middleware: decoyWatchLanguageModelMiddleware(
+      createDecoyWatch({
+        decoys: ['decoy-vercel-stream-clean-1234'],
+        report: false,
+        onLeak: (hit) => {
+          hits.push(hit);
+        },
+      }),
+    ),
+  });
+  assert.equal(await consumeTextStream(model), 'clean stream output');
+  assert.equal(hits.length, 0);
+});
+
+test('block:false streams full decoy text and reports one hit', async () => {
+  const decoy = 'decoy-vercel-stream-observe-1234';
+  const hits: DecoyHit[] = [];
+  const model = wrapLanguageModel({
+    model: streamingModel(['full decoy-vercel-', 'stream-observe-1234']),
+    middleware: decoyWatchLanguageModelMiddleware(
+      createDecoyWatch({
+        decoys: [decoy],
+        report: false,
+        block: false,
+        onLeak: (hit) => {
+          hits.push(hit);
+        },
+      }),
+    ),
+  });
+  assert.equal(await consumeTextStream(model), `full ${decoy}`);
   assert.equal(hits.length, 1);
   assert.equal(hits[0]?.surface, 'model_output');
 });

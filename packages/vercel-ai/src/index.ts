@@ -106,9 +106,11 @@ export function denyVaultTool<TArgs = Record<string, unknown>, TResult = unknown
  * Create AI SDK language-model middleware that checks generated output.
  *
  * Attach it with `wrapLanguageModel`. `generateText` output, including JSON
- * text used for structured output, is checked before the SDK returns it. This
- * middleware does not wrap `doStream`: `streamText` chunks may already reach
- * the caller and cannot be retracted, so streaming output is not covered.
+ * text used for structured output, is checked before the SDK returns it.
+ * Streaming output is checked when the stream ends. Text already delivered to
+ * the caller before the stream ends cannot be retracted, so streaming provides
+ * end-of-stream detection and reporting, not prevention. A decoy split across
+ * separate model calls is not joined.
  */
 export function decoyWatchLanguageModelMiddleware(
   watch: DecoyWatch,
@@ -119,6 +121,28 @@ export function decoyWatchLanguageModelMiddleware(
       const result = await doGenerate();
       await watch.check(result.content, 'model_output');
       return result;
+    },
+    wrapStream: async ({ doStream }) => {
+      const result = await doStream();
+      let accumulatedText = '';
+      const stream = result.stream.pipeThrough(new TransformStream({
+        transform(part, controller) {
+          if (part.type === 'text-delta' || part.type === 'tool-input-delta') {
+            accumulatedText += part.delta;
+          } else if (part.type === 'tool-call') {
+            accumulatedText += part.input;
+          }
+          controller.enqueue(part);
+        },
+        async flush(controller) {
+          try {
+            await watch.check(accumulatedText, 'model_output');
+          } catch (error) {
+            controller.error(error);
+          }
+        },
+      }));
+      return { ...result, stream };
     },
   };
 }
