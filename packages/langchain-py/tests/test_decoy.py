@@ -401,6 +401,89 @@ def test_check_uses_one_deadline_and_calls_fast_callbacks_for_all_hits():
     assert {hit.fingerprint for hit in seen} == set(watch.fingerprints())
 
 
+def test_reports_start_before_blocking_callbacks():
+    decoys = [f"decoy-value-{index:04d}" for index in range(8)]
+    reports = []
+
+    def transport(_url, _headers, body, _timeout):
+        reports.append(json.loads(body)["tripwire_hash"])
+        return 200
+
+    def slow_callback(_hit):
+        time.sleep(2)
+
+    watch = create_decoy_watch(
+        decoys,
+        api_key="test-key",
+        block=False,
+        report_timeout=0.25,
+        transport=transport,
+        on_leak=slow_callback,
+    )
+    watch.check(" ".join(decoys))
+    assert set(reports) == set(watch.fingerprints())
+
+
+def test_clean_check_creates_no_threads():
+    watch = create_decoy_watch([DECOY], report=False, block=False)
+    before = threading.active_count()
+    assert watch.check("clean") == []
+    assert threading.active_count() == before
+
+
+def test_late_report_failure_reaches_error_observer():
+    failures = []
+    late_failure = threading.Event()
+
+    def transport(*_args):
+        time.sleep(0.1)
+        raise RuntimeError("late failure")
+
+    def on_report_error(info):
+        failures.append(info)
+        if info.get("error") == "late failure":
+            late_failure.set()
+
+    watch = create_decoy_watch(
+        [DECOY],
+        api_key="test-key",
+        block=False,
+        report_timeout=0.02,
+        transport=transport,
+        on_report_error=on_report_error,
+    )
+    watch.check(DECOY)
+    assert late_failure.wait(1)
+    assert sum(info.get("error") == "timeout" for info in failures) == 1
+
+
+def test_callback_workers_are_daemon_threads():
+    entered = threading.Event()
+    release = threading.Event()
+
+    def callback(_hit):
+        entered.set()
+        release.wait(1)
+
+    watch = create_decoy_watch(
+        [DECOY],
+        report=False,
+        block=False,
+        report_timeout=0.02,
+        on_leak=callback,
+    )
+    watch.check(DECOY)
+    assert entered.is_set()
+    workers = [
+        thread
+        for thread in threading.enumerate()
+        if thread.name.startswith("deny-decoy-")
+    ]
+    assert workers
+    assert all(thread.daemon for thread in workers)
+    release.set()
+
+
 def test_arm_posts_plaintext_tripwire_per_fingerprint():
     calls = []
 

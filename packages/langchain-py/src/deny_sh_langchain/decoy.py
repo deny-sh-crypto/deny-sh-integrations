@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import asyncio
 import base64
-import concurrent.futures
 import datetime
 import hashlib
 import inspect
@@ -589,7 +588,7 @@ class DecoyWatch:
             text = text.replace(decoy.value, "[deny:redacted]")
         return text
 
-    def _report_hit(self, hit: DecoyHit, deadline: float) -> None:
+    def _report_hit(self, hit: DecoyHit) -> None:
         if not self._report:
             return
         try:
@@ -602,8 +601,6 @@ class DecoyWatch:
                 },
                 bounded=False,
             )
-            if time.monotonic() >= deadline:
-                return
             if not 200 <= status < 300:
                 self._notify_report_error(
                     {
@@ -613,8 +610,6 @@ class DecoyWatch:
                     }
                 )
         except TimeoutError:
-            if time.monotonic() >= deadline:
-                return
             self._notify_report_error(
                 {
                     "fingerprint": hit.fingerprint,
@@ -623,8 +618,6 @@ class DecoyWatch:
                 }
             )
         except BaseException as error:  # noqa: BLE001 - reporting never escapes
-            if time.monotonic() >= deadline:
-                return
             self._notify_report_error(
                 {
                     "fingerprint": hit.fingerprint,
@@ -635,32 +628,105 @@ class DecoyWatch:
 
     def check(self, value: Any, surface: DecoySurface = "other") -> List[DecoyHit]:
         hits, incomplete = self._scan(value, surface)
-        deadline = time.monotonic() + self._report_timeout
-        executor = concurrent.futures.ThreadPoolExecutor(max_workers=8)
-        futures: List[concurrent.futures.Future[Any]] = []
-
-        def notify_leak(hit: DecoyHit) -> None:
-            if self._on_leak is None:
-                return
-            try:
-                result = self._on_leak(hit)
-                if inspect.isawaitable(result):
-                    asyncio.run(result)
-            except BaseException:  # noqa: BLE001 - callbacks never escape
-                return
-
-        try:
-            futures.extend(executor.submit(notify_leak, hit) for hit in hits)
-            futures.extend(
-                executor.submit(self._report_hit, hit, deadline) for hit in hits
+        if hits:
+            deadline = time.monotonic() + self._report_timeout
+            report_states = (
+                [
+                    {"done": threading.Event(), "finished_at": None}
+                    for _hit in hits
+                ]
+                if self._report
+                else []
             )
-            concurrent.futures.wait(
-                futures, timeout=max(0.0, deadline - time.monotonic())
-            )
-        finally:
-            for future in futures:
-                future.cancel()
-            executor.shutdown(wait=False, cancel_futures=True)
+            report_started = [threading.Event() for _hit in hits] if self._report else []
+            completed = threading.Event()
+            completion_lock = threading.Lock()
+            task_count = len(report_states) + (len(hits) if self._on_leak else 0)
+            remaining = task_count
+
+            def mark_completed() -> None:
+                nonlocal remaining
+                with completion_lock:
+                    remaining -= 1
+                    if remaining == 0:
+                        completed.set()
+
+            def report_task(
+                hit: DecoyHit, started: threading.Event, state: Dict[str, Any]
+            ) -> None:
+                started.set()
+                try:
+                    self._report_hit(hit)
+                finally:
+                    state["finished_at"] = time.monotonic()
+                    state["done"].set()
+                    mark_completed()
+
+            def notify_leak(hit: DecoyHit) -> None:
+                try:
+                    result = self._on_leak(hit) if self._on_leak else None
+                    if inspect.isawaitable(result):
+                        asyncio.run(result)
+                except BaseException:  # noqa: BLE001 - callbacks never escape
+                    pass
+                finally:
+                    mark_completed()
+
+            def start_workers(
+                work: queue.Queue[Callable[[], None]], name: str
+            ) -> None:
+                def worker() -> None:
+                    while True:
+                        try:
+                            task = work.get_nowait()
+                        except queue.Empty:
+                            return
+                        task()
+
+                for index in range(min(8, work.qsize())):
+                    threading.Thread(
+                        target=worker,
+                        name=f"deny-decoy-{name}-{index}",
+                        daemon=True,
+                    ).start()
+
+            report_work: queue.Queue[Callable[[], None]] = queue.Queue()
+            for hit, started, state in zip(hits, report_started, report_states):
+                report_work.put(
+                    lambda hit=hit, started=started, state=state: report_task(
+                        hit, started, state
+                    )
+                )
+            start_workers(report_work, "report")
+
+            if len(report_started) <= 8:
+                for started in report_started:
+                    started.wait(max(0.0, deadline - time.monotonic()))
+
+            callback_work: queue.Queue[Callable[[], None]] = queue.Queue()
+            if self._on_leak:
+                for hit in hits:
+                    callback_work.put(lambda hit=hit: notify_leak(hit))
+            start_workers(callback_work, "callback")
+
+            if task_count:
+                completed.wait(max(0.0, deadline - time.monotonic()))
+            for hit, state in zip(hits, report_states):
+                finished_at = state["finished_at"]
+                if finished_at is not None and finished_at <= deadline:
+                    continue
+                threading.Thread(
+                    target=self._notify_report_error,
+                    args=(
+                        {
+                            "fingerprint": hit.fingerprint,
+                            "surface": hit.surface,
+                            "error": "timeout",
+                        },
+                    ),
+                    name="deny-decoy-report-timeout",
+                    daemon=True,
+                ).start()
         if self._block and hits:
             raise DenyDecoyLeakError(hits)
         if incomplete and not hits:
