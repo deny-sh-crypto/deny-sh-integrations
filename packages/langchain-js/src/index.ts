@@ -140,19 +140,7 @@ export function decoyWatchToolInput(
   };
 
   const target = inner as ToolWithCall;
-  const inputToScan = (input: unknown): unknown => {
-    if (
-      input !== null
-      && typeof input === 'object'
-      && 'args' in input
-      && 'name' in input
-      && 'id' in input
-      && 'type' in input
-    ) {
-      return (input as { args: unknown }).args;
-    }
-    return input;
-  };
+  const inputToScan = (input: unknown): unknown => input;
 
   return new Proxy(target, {
     get(proxyTarget, property, receiver) {

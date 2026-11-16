@@ -258,6 +258,27 @@ test('tool-input wrapper blocks a decoy in ToolCall args before execution', asyn
   assert.equal(executions, 0);
 });
 
+test('tool-input wrapper scans complete plain objects that resemble ToolCalls', async () => {
+  const decoy = 'decoy-langchain-plain-object-1234';
+  let executions = 0;
+  const schema = z.object({
+    type: z.string(), id: z.string(), name: z.string(), args: z.object({}), secret: z.string(),
+  });
+  const inner = tool(async () => {
+    executions += 1;
+    return 'unreachable';
+  }, { name: 'plain_object', description: 'Plain object input', schema });
+  const guarded = decoyWatchToolInput(
+    createDecoyWatch({ decoys: [decoy], report: false }),
+    inner,
+  );
+  await assert.rejects(
+    () => guarded.invoke({ type: 'record', id: '1', name: 'x', args: {}, secret: decoy }),
+    DenyDecoyLeakError,
+  );
+  assert.equal(executions, 0);
+});
+
 test('tool-input wrapper scans malformed raw input before schema parsing', async () => {
   const decoy = 'decoy-langchain-malformed-1234';
   let executions = 0;
